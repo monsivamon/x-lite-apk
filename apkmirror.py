@@ -6,12 +6,14 @@ from utils import download, get_scraper
 
 @dataclass
 class Version:
+    # APKのバージョン文字列と詳細ページのURLを保持する
     version: str
     link: str
 
 
 @dataclass
 class Variant:
+    # APKのバリアント情報（バンドルかどうか、ダウンロードリンク、アーキテクチャ）を保持する
     is_bundle: bool
     link: str
     architecture: str
@@ -19,11 +21,13 @@ class Variant:
 
 @dataclass
 class App:
+    # アプリの名前とリンクを保持する（現状未使用の予備定義）
     name: str
     link: str
 
 
 class FailedToFindElement(Exception):
+    # スクレイピングで目的の要素が見つからなかった場合の例外
     def __init__(self, message=None) -> None:
         self.message = (
             f"Failed to find element{' ' + message if message is not None else ''}"  # noqa: E501
@@ -32,13 +36,14 @@ class FailedToFindElement(Exception):
 
 
 class FailedToFetch(Exception):
+    # ページの取得に失敗した場合の例外
     def __init__(self, url=None) -> None:
         self.message = f"Failed to fetch{' ' + url if url is not None else ''}"  # noqa: E501
         super().__init__(self.message)
 
 
 def get_versions(url: str) -> list[Version]:
-    """Get the latest version of the app from the given apkmirror url"""
+    # 指定のAPKMirrorページからバージョン一覧を抽出する
     response = get_scraper().get(url)
     if response.status_code != 200:
         raise FailedToFetch(f"{url}: {response.status_code}")
@@ -65,7 +70,7 @@ def get_versions(url: str) -> list[Version]:
 
 
 def download_apk(variant: Variant, path: str = "big_file.apkm"):
-    """Download apk from the variant link"""
+    # バリアントのページから直接ダウンロードリンクを辿り、APKファイルを保存する
     url = variant.link
 
     response = get_scraper().get(url)
@@ -106,6 +111,7 @@ def download_apk(variant: Variant, path: str = "big_file.apkm"):
 
 
 def get_variants(version: Version) -> list[Variant]:
+    # 特定バージョンのページから利用可能なバリアント一覧を取得する
     url = version.link
     variants_page = get_scraper().get(url)
     if variants_page is None:

@@ -6,6 +6,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+# Pikoリポジトリの情報とブランチ、定数ファイルのパスを定義
 PIKO_REPO = "crimera/piko"
 PIKO_REPOSITORY = f"https://github.com/{PIKO_REPO}.git"
 PIKO_BRANCH = "x-lite"
@@ -16,12 +17,13 @@ XLITE_CONSTANTS = (
 
 @dataclass(frozen=True)
 class PikoBuild:
+    # Pikoのビルド結果を保持するデータクラス（コミットハッシュと対応バージョン一覧）
     commit: str
     supported_versions: frozenset[str]
 
 
 def get_supported_versions(constants: str) -> frozenset[str]:
-    """Return the X-Lite app versions supported by the checked-out Piko source."""
+    # Constants.ktからAppTargetのバージョン文字列を抽出し、サポート対象バージョンの集合を返す
     versions = frozenset(
         re.findall(r'AppTarget\(version\s*=\s*"([^"]+)"\)', constants)
     )
@@ -31,12 +33,15 @@ def get_supported_versions(constants: str) -> frozenset[str]:
 
 
 def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
+    # 出力先ディレクトリを作成（存在しない場合のみ）
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # 一時ディレクトリにPikoをクローンしてビルド
     with tempfile.TemporaryDirectory(prefix="piko-") as temporary_directory:
         piko_directory = Path(temporary_directory) / "piko"
 
+        # x-liteブランチを浅くクローン
         subprocess.run(
             [
                 "git",
@@ -51,10 +56,12 @@ def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
             check=True,
         )
 
+        # サポート対象のXバージョン一覧を取得
         supported_versions = get_supported_versions(
             (piko_directory / XLITE_CONSTANTS).read_text()
         )
 
+        # GradleでAndroid向けパッチをビルド
         subprocess.run(
             ["./gradlew", "clean", "buildAndroid"],
             cwd=piko_directory,
@@ -62,6 +69,7 @@ def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
             check=True,
         )
 
+        # ビルド成果物（.mpp）を検索して出力先へコピー
         artifacts = sorted(
             (piko_directory / "patches" / "build" / "libs").glob("patches-*.mpp")
         )
@@ -70,6 +78,7 @@ def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
 
         shutil.copy2(artifacts[-1], output_path)
 
+        # ビルドに使用したPikoのコミットハッシュを取得
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=piko_directory,
@@ -78,4 +87,5 @@ def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
             text=True,
         )
 
+    # ビルド結果（コミットハッシュと対応バージョン）を返す
     return PikoBuild(commit=commit.stdout.strip(), supported_versions=supported_versions)

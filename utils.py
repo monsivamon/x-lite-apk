@@ -5,11 +5,12 @@ import sys
 
 import requests
 
+# cloudscraperインスタンスをキャッシュするグローバル変数
 _scraper = None
 
 
 def github_api_headers() -> dict[str, str]:
-    """Return authenticated headers for GitHub API requests when available."""
+    # GitHub APIリクエスト用のヘッダー（トークンがあれば認証付き）を生成する
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -21,6 +22,7 @@ def github_api_headers() -> dict[str, str]:
 
 
 def get_scraper():
+    # cloudscraperのシングルトンインスタンスを取得（初回のみ生成）
     global _scraper
     if _scraper is None:
         import cloudscraper
@@ -32,11 +34,13 @@ def get_scraper():
 
 
 def panic(message: str):
+    # エラーメッセージを標準エラーに出力して終了する
     print(message, file=sys.stderr)
     exit(1)
 
 
 def download(link, out, headers=None, use_scraper=False):
+    # ファイルをダウンロードして保存する（既存ファイルがある場合はスキップ）
     dir_name = os.path.dirname(out)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
@@ -50,7 +54,7 @@ def download(link, out, headers=None, use_scraper=False):
 
     session = get_scraper() if use_scraper else requests
 
-    # https://www.slingacademy.com/article/python-requests-module-how-to-download-files-from-urls/#Streaming_Large_Files
+    # ストリーミングで大きなファイルをダウンロードする
     with session.get(link, stream=True, headers=headers) as r:
         r.raise_for_status()
         with open(out, "wb") as f:
@@ -60,6 +64,7 @@ def download(link, out, headers=None, use_scraper=False):
 
 
 def run_command(command: list[str]):
+    # シェルコマンドを実行し、失敗時は標準出力/エラーを表示して終了する
     cmd = subprocess.run(command, capture_output=True, shell=True)
 
     try:
@@ -79,6 +84,7 @@ def patch_apk(
     out: str | None = None,
     minimum_patches: int | None = None,
 ):
+    # Morphe CLIを使ってAPKにパッチを適用し、指定された数のパッチが適用されたか検証する
     command = [
         "java",
         "-jar",
@@ -86,7 +92,7 @@ def patch_apk(
         "patch",
         "-p",
         patches,
-        # use j-hc's keystore so we wouldn't need to reinstall
+        # 再インストール不要な固定キーストアを使用
         "--keystore",
         "ks.keystore",
         "--keystore-entry-password",
@@ -97,9 +103,9 @@ def patch_apk(
         "jhc",
         "--keystore-entry-alias",
         "jhc",
-        # Let Morphe attempt patches targeting an older X version.
+        # 古いXバージョンへのパッチ適用を強制
         "--force",
-        # Avoid enabling unrelated default patches when forcing compatibility.
+        # 強制互換時にデフォルトパッチを無効化
         "--exclusive",
     ]
 
@@ -122,6 +128,7 @@ def patch_apk(
     print(result.stderr, end="", file=sys.stderr)
     result.check_returncode()
 
+    # 適用されたパッチ数を出力から抽出し、最小要求数を満たしているか確認
     if minimum_patches is not None:
         output = result.stdout + result.stderr
         match = re.search(r"Applying\s+(\d+)\s+patches?", output, re.IGNORECASE)
@@ -136,6 +143,7 @@ def patch_apk(
 
 
 def publish_release(tag: str, files: list[str], message: str, title = ""):
+    # GitHub CLIでリリースを作成し、指定のアセットをアップロードする
     key = os.environ.get("GITHUB_TOKEN")
     if key is None:
         raise Exception("GITHUB_TOKEN is not set")
