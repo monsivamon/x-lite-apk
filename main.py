@@ -1,9 +1,7 @@
-from argparse import ArgumentParser
 import json
 import os
 from pathlib import Path
 
-# ApkMirrorとGitHub操作、Pikoビルド関連のモジュールをインポート
 import apkmirror
 import github
 from apkmirror import Variant, Version
@@ -13,22 +11,19 @@ from constants import REPO
 from download_bins import download_morphe_cli
 from utils import panic, publish_release
 
-# パッチ一覧とパッチバイナリのアセット名を定義
 PATCHES_LIST_ASSET = "patches-list.json"
 PATCHES_MPP = "bins/patches.mpp"
 
-
+# サポート対象の最新バージョンを取得する
 def get_latest_version(
     versions: list[Version], supported_versions: frozenset[str] | None = None
 ) -> Version | None:
-    # サポート対象バージョンの中から最新のバージョンを取得
     for version in versions:
         if supported_versions is None or version.version in supported_versions:
             return version
 
-
+# APKバンドルを選択する
 def get_bundle_variant(variants: list[Variant]) -> Variant | None:
-    # ユニバーサルなAPKバンドル、または最初に見つかったバンドルを返す
     universal_bundle = next(
         (
             variant
@@ -42,32 +37,38 @@ def get_bundle_variant(variants: list[Variant]) -> Variant | None:
 
     return next((variant for variant in variants if variant.is_bundle), None)
 
-
+# パッチ一覧をMarkdown形式に整形する
 def format_patch_list(
-    patches: list[str], previous_patches: list[str] | None
+    patches: list[str],
+    previous_patches: list[str] | None,
+    statuses: dict[str, bool] | None = None,
 ) -> str:
-    # 新旧パッチを比較し、新規パッチに「**NEW**」マークを付けて整形
     known_patches = set(previous_patches or [])
     mark_new_patches = previous_patches is not None
 
-    return "\n".join(
-        f"- {'**NEW** ' if mark_new_patches and patch not in known_patches else ''}{patch}"
-        for patch in patches
-    )
+    lines = []
+    for patch in patches:
+        new_mark = "**NEW** " if mark_new_patches and patch not in known_patches else ""
 
+        if statuses is not None:
+            status = "Success" if statuses.get(patch, False) else "False"
+            lines.append(f"- {new_mark}{patch} — {status}")
+        else:
+            lines.append(f"- {new_mark}{patch}")
 
+    return "\n".join(lines)
+
+# パッチ一覧をJSONファイルに書き出す
 def write_patches_list(patches: list[str]) -> None:
-    # パッチ一覧をJSONファイルに書き出す
     Path(PATCHES_LIST_ASSET).write_text(
         json.dumps(patches, indent=2) + "\n",
         encoding="utf-8",
     )
 
-
+# 前回リリース以降のPikoコミット一覧を取得する
 def get_piko_commits(
     previous_release: github.GithubRelease | None, current_commit: str
 ) -> list[github.GithubCommit] | None:
-    # 前回リリース以降のPikoコミット一覧を取得
     if previous_release is None:
         return None
 
@@ -77,9 +78,8 @@ def get_piko_commits(
 
     return github.get_commits_between(PIKO_REPO, previous_commit, current_commit)
 
-
+# コミットリストをMarkdown形式に整形する
 def format_commit_list(commits: list[github.GithubCommit] | None) -> str:
-    # コミットリストをMarkdown形式の文字列に整形
     if not commits:
         return ""
 
@@ -89,20 +89,18 @@ def format_commit_list(commits: list[github.GithubCommit] | None) -> str:
     )
     return f"Piko commits since previous release:\n{entries}"
 
-
+# APKのダウンロードからパッチ適用、リリース発行までを実行する
 def process(
     latest_version: Version,
     piko_build: PikoBuild,
     previous_release: github.GithubRelease | None = None,
 ):
-    # APKのダウンロードからパッチ適用、リリース発行までの一連の処理を実行
     variants: list[Variant] = apkmirror.get_variants(latest_version)
 
     download_link = get_bundle_variant(variants)
     if download_link is None:
         raise Exception("APK bundle not found")
 
-    # 入力バージョンごとにAPKをダウンロード（古いAPKの誤パッチを防ぐ）
     apk_path = f"big_file-{latest_version.version}.apkm"
     apkmirror.download_apk(download_link, path=apk_path)
     if not os.path.exists(apk_path):
@@ -115,7 +113,9 @@ def process(
     apk_name = f"piko-lite-v{latest_version.version}-{piko_commit}.apk"
 
     print(f"Using Piko x-lite@{piko_commit}")
-    patches = build_apks(latest_version, apk_path, piko_build.commit)
+
+    patches, patch_statuses = build_apks(latest_version, apk_path, piko_build.commit)
+
     write_patches_list(patches)
 
     previous_patches = (
@@ -123,12 +123,15 @@ def process(
         if previous_release is not None
         else None
     )
-    patch_list = format_patch_list(patches, previous_patches)
+
+    patch_list = format_patch_list(patches, previous_patches, patch_statuses)
+
     commit_list = format_commit_list(
         get_piko_commits(previous_release, piko_build.commit)
     )
     additional_notes = commit_list
     additional_notes = f"\n\n{additional_notes}" if additional_notes else ""
+
     message = f"""Patches applied:
 {patch_list}{additional_notes}
 
@@ -143,14 +146,12 @@ Piko source:
         release_tag,
     )
 
-
+# 最新のXバージョンを確認し、必要ならビルドを開始する
 def main():
-    # 最新Xバージョンを取得し、Pikoでパッチ可能ならビルドを開始
     versions = apkmirror.get_versions(
         "https://www.apkmirror.com/apk/x-corp/twitter/"
     )
 
-    # 最初にPikoをビルドし、互換性のあるXバージョンを特定
     piko_build = build_piko_patches()
     latest_version = get_latest_version(versions, piko_build.supported_versions)
     if latest_version is None:
@@ -169,34 +170,5 @@ def main():
     process(latest_version, piko_build, last_build_version)
 
 
-def manual(version: str):
-    # 指定バージョンがサポート対象なら手動ビルドを実行
-    piko_build = build_piko_patches()
-    if version not in piko_build.supported_versions:
-        supported = ", ".join(sorted(piko_build.supported_versions))
-        raise ValueError(f"{version} is not supported by Piko x-lite (supported: {supported})")
-
-    link = (
-        "https://www.apkmirror.com/apk/x-corp/twitter/"
-        f"x-{version.replace('.', '-')}-release"
-    )
-    process(
-        Version(link=link, version=version),
-        piko_build,
-        github.get_last_build_version(REPO),
-    )
-
-
 if __name__ == "__main__":
-    # コマンドライン引数に応じて自動ビルドか手動ビルドかを切り替え
-    parser = ArgumentParser(description="Piko APK")
-    parser.add_argument("--m", action="store", dest="mode", default=0)
-    parser.add_argument("--v", action="store", dest="version", default=0)
-    args = parser.parse_args()
-
-    if args.mode:
-        if not args.version:
-            raise Exception("Version is required.")
-        manual(args.version)
-    else:
-        main()
+    main()
