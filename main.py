@@ -44,16 +44,29 @@ def get_bundle_variant(variants: list[Variant]) -> Variant | None:
 
 
 def format_patch_list(
-    patches: list[str], previous_patches: list[str] | None
+    patches: list[str],
+    previous_patches: list[str] | None,
+    statuses: dict[str, bool] | None = None,
 ) -> str:
-    # 新旧パッチを比較し、新規パッチに「**NEW**」マークを付けて整形
+    """
+    パッチ一覧をMarkdown形式に整形する。
+
+    statuses が与えられた場合、各パッチの成否を付記する。
+    """
     known_patches = set(previous_patches or [])
     mark_new_patches = previous_patches is not None
 
-    return "\n".join(
-        f"- {'**NEW** ' if mark_new_patches and patch not in known_patches else ''}{patch}"
-        for patch in patches
-    )
+    lines = []
+    for patch in patches:
+        new_mark = "**NEW** " if mark_new_patches and patch not in known_patches else ""
+
+        if statuses is not None:
+            status = "Success" if statuses.get(patch, False) else "False"
+            lines.append(f"- {new_mark}{patch} — {status}")
+        else:
+            lines.append(f"- {new_mark}{patch}")
+
+    return "\n".join(lines)
 
 
 def write_patches_list(patches: list[str]) -> None:
@@ -115,7 +128,10 @@ def process(
     apk_name = f"piko-lite-v{latest_version.version}-{piko_commit}.apk"
 
     print(f"Using Piko x-lite@{piko_commit}")
-    patches = build_apks(latest_version, apk_path, piko_build.commit)
+
+    # パッチを適用し、パッチ名一覧と成否を取得
+    patches, patch_statuses = build_apks(latest_version, apk_path, piko_build.commit)
+
     write_patches_list(patches)
 
     previous_patches = (
@@ -123,12 +139,16 @@ def process(
         if previous_release is not None
         else None
     )
-    patch_list = format_patch_list(patches, previous_patches)
+
+    # 成否を含めてリリースノート用のパッチ一覧を作成
+    patch_list = format_patch_list(patches, previous_patches, patch_statuses)
+
     commit_list = format_commit_list(
         get_piko_commits(previous_release, piko_build.commit)
     )
     additional_notes = commit_list
     additional_notes = f"\n\n{additional_notes}" if additional_notes else ""
+
     message = f"""Patches applied:
 {patch_list}{additional_notes}
 

@@ -82,9 +82,15 @@ def patch_apk(
     includes: list[str] | None = None,
     excludes: list[str] | None = None,
     out: str | None = None,
-    minimum_patches: int | None = None,
-):
-    # Morphe CLIを使ってAPKにパッチを適用し、指定された数のパッチが適用されたか検証する
+    minimum_patches: int | None = None,        # 後方互換のため残すが使用しない
+    continue_on_error: bool = False,
+) -> dict[str, bool]:
+    """
+    Morphe CLIを使ってAPKにパッチを適用し、パッチごとの成否を返す。
+
+    continue_on_error=True の場合、失敗したパッチがあっても処理を継続する。
+    戻り値は、includes で指定した各パッチ名と成否 (True=成功, False=失敗) の辞書。
+    """
     command = [
         "java",
         "-jar",
@@ -109,6 +115,10 @@ def patch_apk(
         "--exclusive",
     ]
 
+    # 失敗しても続行するオプション
+    if continue_on_error:
+        command.append("--continue-on-error")
+
     if includes is not None:
         for i in includes:
             command.append("-e")
@@ -123,23 +133,35 @@ def patch_apk(
         command.extend(["--out", out])
 
     command.append(apk)
+
     result = subprocess.run(command, text=True, capture_output=True)
     print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
-    result.check_returncode()
 
-    # 適用されたパッチ数を出力から抽出し、最小要求数を満たしているか確認
-    if minimum_patches is not None:
-        output = result.stdout + result.stderr
-        match = re.search(r"Applying\s+(\d+)\s+patches?", output, re.IGNORECASE)
-        applied = int(match.group(1)) if match else 0
-        if applied < minimum_patches:
-            raise RuntimeError(
-                f"Morphe applied {applied} patches; expected at least {minimum_patches}"
+    # fatal error の場合は終了
+    if result.returncode != 0:
+        result.check_returncode()
+
+    # パッチごとの成否を解析
+    output = result.stdout + result.stderr
+    statuses: dict[str, bool] = {}
+
+    if includes:
+        # "FAILED: パッチ名" の形式を検出
+        failed = set(
+            re.findall(
+                r"FAILED:\s*(.+?)\s*$",
+                output,
+                re.MULTILINE | re.IGNORECASE,
             )
+        )
+        for patch_name in includes:
+            statuses[patch_name] = patch_name not in failed
 
     if out is not None and not os.path.exists(out):
         raise FileNotFoundError(f"Morphe did not create the expected output: {out}")
+
+    return statuses
 
 
 def publish_release(tag: str, files: list[str], message: str, title = ""):

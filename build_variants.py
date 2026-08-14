@@ -36,22 +36,34 @@ def get_xlite_patches(cli: str, patches: str) -> list[str]:
     return includes
 
 
-def build_apks(latest_version: Version, apk: str, piko_commit: str) -> list[str]:
-    # X-LiteパッチとTwitter復活パッチを適用してAPKをビルドする
+def build_apks(
+    latest_version: Version,
+    apk: str,
+    piko_commit: str,
+) -> tuple[list[str], dict[str, bool]]:
+    """
+    X-LiteパッチとTwitter復活パッチを適用してAPKをビルドする。
+
+    戻り値:
+        - 適用対象パッチ名のリスト
+        - 各パッチの成否を表す dict（True = 成功, False = 失敗）
+    """
     patches = "bins/patches.mpp"
     cli = "bins/morphe-cli.jar"
+
     includes = get_xlite_patches(cli, patches)
     includes.append(BRING_BACK_TWITTER_PATCH)
 
-    # APKにパッチを適用し、指定パッチ数がすべて当たっているか検証しながら出力
-    patch_apk(
+    # パッチを適用する
+    # 一部パッチが失敗しても続行し、成否を返す
+    patch_statuses = patch_apk(
         cli,
         patches,
         apk,
         includes=includes,
         excludes=[],
         out=f"piko-lite-v{latest_version.version}-{piko_commit[:7]}.apk",
-        minimum_patches=len(includes),
+        continue_on_error=True,
     )
 
-    return includes
+    return includes, patch_statuses
