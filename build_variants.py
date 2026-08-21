@@ -4,7 +4,7 @@ import subprocess
 from apkmirror import Version
 from utils import patch_apk
 
-XLITE_PATCH_NAME = re.compile(r"^Name:\s*(X-Lite:\s*.+?)\s*$", re.MULTILINE)
+XLITE_PATCH_NAME = re.compile(r"^Name:\s*(NewX:\s*.+?)\s*$", re.MULTILINE)
 BRING_BACK_TWITTER_PATCH = "Bring back twitter"
 
 # Morphe CLIからX-Liteパッチ名一覧を取得する
