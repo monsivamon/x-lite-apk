@@ -5,7 +5,6 @@ from apkmirror import Version
 from utils import patch_apk
 
 XLITE_PATCH_NAME = re.compile(r"^Name:\s*(NewX:\s*.+?)\s*$", re.MULTILINE)
-BRING_BACK_TWITTER_PATCH = "Bring back twitter"
 
 # Morphe CLIからX-Liteパッチ名一覧を取得する
 def get_xlite_patches(cli: str, patches: str) -> list[str]:
@@ -30,7 +29,7 @@ def get_xlite_patches(cli: str, patches: str) -> list[str]:
         raise RuntimeError("Morphe returned no X-Lite patches")
     return includes
 
-# APKに対してX-LiteパッチとBring back twitterを適用し、成否を返す
+# APKに対してX-Liteパッチを適用し、成否を返す
 def build_apks(
     latest_version: Version,
     apk: str,
@@ -40,7 +39,6 @@ def build_apks(
     cli = "bins/morphe-cli.jar"
 
     includes = get_xlite_patches(cli, patches)
-    includes.append(BRING_BACK_TWITTER_PATCH)
 
     patch_statuses = patch_apk(
         cli,
