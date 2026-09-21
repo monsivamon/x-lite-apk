@@ -7,7 +7,8 @@ import requests
 
 _scraper = None
 
-# GitHub APIリクエスト用のヘッダーを生成する
+
+# Build headers for GitHub API requests, adding auth if available
 def github_api_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -18,7 +19,8 @@ def github_api_headers() -> dict[str, str]:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
-# cloudscraperのシングルトンインスタンスを取得する
+
+# Return the singleton cloudscraper session instance
 def get_scraper():
     global _scraper
     if _scraper is None:
@@ -29,12 +31,14 @@ def get_scraper():
         })
     return _scraper
 
-# エラーメッセージを出力して終了する
+
+# Print an error message to stderr and exit with code 1
 def panic(message: str):
     print(message, file=sys.stderr)
     exit(1)
 
-# ファイルをダウンロードして保存する
+
+# Download a file from link to out, optionally via cloudscraper
 def download(link, out, headers=None, use_scraper=False):
     dir_name = os.path.dirname(out)
     if dir_name:
@@ -49,14 +53,15 @@ def download(link, out, headers=None, use_scraper=False):
 
     session = get_scraper() if use_scraper else requests
 
-    with session.get(link, stream=True, headers=headers) as r:
+    with session.get(link, stream=True, headers=headers, timeout=30) as r:
         r.raise_for_status()
         with open(out, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
 
-# シェルコマンドを実行し、失敗時は終了する
+
+# Run a shell command and exit on failure
 def run_command(command: list[str]):
     cmd = subprocess.run(command, capture_output=True, shell=True)
 
@@ -67,7 +72,8 @@ def run_command(command: list[str]):
         print(cmd.stderr)
         exit(1)
 
-# Morphe CLIでAPKにパッチを適用し、パッチごとの成否を返す
+
+# Apply patches via Morphe CLI and return per-patch success status
 def patch_apk(
     cli: str,
     patches: str,
@@ -143,13 +149,22 @@ def patch_apk(
 
     return statuses
 
-# GitHub CLIでリリースを作成しアセットをアップロードする
+
+# Create a GitHub release via gh CLI and upload assets
 def publish_release(tag: str, files: list[str], message: str, title = ""):
     key = os.environ.get("GITHUB_TOKEN")
     if key is None:
         raise Exception("GITHUB_TOKEN is not set")
 
-    command = ["gh", "release", "create", "--latest", tag, "--notes", message, "--title", title]
+    ref = os.environ.get("GITHUB_REF", "")
+    is_prerelease = ref != "refs/heads/master"
+
+    command = ["gh", "release", "create", tag, "--notes", message, "--title", title]
+    if is_prerelease:
+        command.append("--prerelease")
+        print(f"Non-master ref ({ref}) -> creating prerelease")
+    else:
+        command.append("--latest")
 
     if len(files) == 0:
         raise Exception("Files should have atleast one item")

@@ -4,46 +4,46 @@ from bs4 import BeautifulSoup, Tag
 from utils import download, get_scraper
 
 
+# Holds an APK version string and its detail page URL
 @dataclass
 class Version:
-    # APKのバージョン文字列と詳細ページのURLを保持する
     version: str
     link: str
 
 
+# Holds APK variant info: bundle flag, download link, architecture
 @dataclass
 class Variant:
-    # APKのバリアント情報（バンドルかどうか、ダウンロードリンク、アーキテクチャ）を保持する
     is_bundle: bool
     link: str
     architecture: str
 
 
+# Holds app name and link (currently unused placeholder)
 @dataclass
 class App:
-    # アプリの名前とリンクを保持する（現状未使用の予備定義）
     name: str
     link: str
 
 
+# Raised when a target element is not found during scraping
 class FailedToFindElement(Exception):
-    # スクレイピングで目的の要素が見つからなかった場合の例外
     def __init__(self, message=None) -> None:
         self.message = (
-            f"Failed to find element{' ' + message if message is not None else ''}"  # noqa: E501
+            f"Failed to find element{' ' + message if message is not None else ''}"
         )
         super().__init__(self.message)
 
 
+# Raised when page fetching fails
 class FailedToFetch(Exception):
-    # ページの取得に失敗した場合の例外
     def __init__(self, url=None) -> None:
-        self.message = f"Failed to fetch{' ' + url if url is not None else ''}"  # noqa: E501
+        self.message = f"Failed to fetch{' ' + url if url is not None else ''}"
         super().__init__(self.message)
 
 
+# Extract version list from the given APKMirror page
 def get_versions(url: str) -> list[Version]:
-    # 指定のAPKMirrorページからバージョン一覧を抽出する
     response = get_scraper().get(url)
     if response.status_code != 200:
         raise FailedToFetch(f"{url}: {response.status_code}")
@@ -69,8 +69,8 @@ def get_versions(url: str) -> list[Version]:
     return out
 
 
+# Follow download link from variant page and save APK file
 def download_apk(variant: Variant, path: str = "big_file.apkm"):
-    # バリアントのページから直接ダウンロードリンクを辿り、APKファイルを保存する
     url = variant.link
 
     response = get_scraper().get(url)
@@ -110,8 +110,8 @@ def download_apk(variant: Variant, path: str = "big_file.apkm"):
     )
 
 
+# Fetch available variants from the version-specific page
 def get_variants(version: Version) -> list[Variant]:
-    # 特定バージョンのページから利用可能なバリアント一覧を取得する
     url = version.link
     variants_page = get_scraper().get(url)
     if variants_page is None:

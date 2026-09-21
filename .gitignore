@@ -2,3 +2,9 @@
 __pycache__
 test.py
 .direnv
+
+# Generated GPG signing secrets (contains private key)
+gpg-secrets.txt
+
+bins/
+

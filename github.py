@@ -7,24 +7,31 @@ from utils import github_api_headers
 
 REQUEST_TIMEOUT_SECONDS = 30
 
+
+# A single downloadable asset attached to a GitHub release
 @dataclass
 class Asset:
     browser_download_url: str
     name: str
 
+
+# A GitHub release with tag, URL, and assets
 @dataclass
 class GithubRelease:
     tag_name: str
     html_url: str
     assets: list[Asset]
 
+
+# A single GitHub commit entry
 @dataclass(frozen=True)
 class GithubCommit:
     sha: str
     html_url: str
     subject: str
 
-# APIレスポンスをGithubReleaseに変換する
+
+# Convert a raw GitHub release JSON into a GithubRelease object
 def _to_github_release(release) -> GithubRelease:
     assets = [
         Asset(browser_download_url=asset["browser_download_url"], name=asset["name"])
@@ -35,7 +42,8 @@ def _to_github_release(release) -> GithubRelease:
         tag_name=release["tag_name"], html_url=release["html_url"], assets=assets
     )
 
-# 指定URLからリリース情報を取得する
+
+# Fetch a release from the given URL; return None on 404
 def _fetch_release(url: str) -> GithubRelease | None:
     response = requests.get(
         url,
@@ -49,18 +57,21 @@ def _fetch_release(url: str) -> GithubRelease | None:
     response.raise_for_status()
     return _to_github_release(response.json())
 
-# タグ名でリリースを取得する
+
+# Fetch a release by its exact tag name
 def get_release_by_tag(repo_url: str, tag: str) -> GithubRelease | None:
     encoded_tag = quote(tag, safe="")
     url = f"https://api.github.com/repos/{repo_url}/releases/tags/{encoded_tag}"
     return _fetch_release(url)
 
-# 最新リリースを取得する
+
+# Fetch the latest non-prerelease release for the repository
 def get_last_build_version(repo_url: str) -> GithubRelease | None:
     url = f"https://api.github.com/repos/{repo_url}/releases/latest"
     return _fetch_release(url)
 
-# 2コミット間のコミット一覧を取得する
+
+# List commits between two refs via the compare API
 def get_commits_between(
     repo_url: str, base: str, head: str
 ) -> list[GithubCommit] | None:
@@ -107,7 +118,8 @@ def get_commits_between(
 
     return result
 
-# リリースアセットからJSON文字列リストを取得する
+
+# Fetch a release asset and parse it as a list of strings
 def get_release_asset_json(
     release: GithubRelease, asset_name: str
 ) -> list[str] | None:

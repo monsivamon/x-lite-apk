@@ -4,7 +4,8 @@ import requests
 
 from utils import download, github_api_headers
 
-# GitHub Releasesから指定パターンに一致するアセットをダウンロードする
+
+# Download the first GitHub release asset matching the given regex
 def download_release_asset(
     repo: str,
     regex: str,
@@ -61,7 +62,8 @@ def download_release_asset(
 
     return latest_release
 
-# Morphe CLIのJARファイルをダウンロードする
+
+# Download the morphe-cli jar from its GitHub releases
 def download_morphe_cli(include_prereleases: bool = False):
     print("Downloading morphe cli")
     download_release_asset(

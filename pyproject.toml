@@ -1,7 +1,7 @@
 [project]
 name = "twitter-apk"
 version = "0.1.0"
-description = "Add your description here"
+description = "Builds patched X-Lite APKs using Piko patches"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

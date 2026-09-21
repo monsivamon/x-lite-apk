@@ -1,12 +1,16 @@
-name: Release - Piko Lite
+name: Release - X Lite APK
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # 毎日16:00 JST (UTC 7:00)
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Try building
+      - name: Build APK
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GRADLE_OPTS: -Dorg.gradle.caching=true
