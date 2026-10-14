@@ -43,13 +43,14 @@ def build_apks(
     latest_version: Version,
     apk: str,
     piko_commit: str,
+    suffix: str = "",
 ) -> tuple[list[str], dict[str, bool]]:
     patches = "bins/patches.mpp"
     cli = "bins/morphe-cli.jar"
 
     includes = get_xlite_patches(cli, patches)
 
-    out_apk = f"piko-lite-v{latest_version.version}-{piko_commit[:7]}.apk"
+    out_apk = f"piko-lite-v{latest_version.version}-{piko_commit[:7]}{suffix}.apk"
     log(f"Patching {apk} -> {out_apk} (may take 5-10 minutes)...")
 
     patch_statuses = patch_apk(

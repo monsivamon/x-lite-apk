@@ -8,9 +8,11 @@ Builds patched Twitter/X APKs using [Piko](https://github.com/crimera/piko/tree/
 
 ## 🚀 Features
 
+- 📱 Publishes up to **2 APK variants** per release (arm64 bundle, lowest Android requirement first).
+- 🛟 **Per-variant fallback**: a failed download or patch on one variant does not block the other.
 - ✅ If a patch fails, the build continues with `--continue-on-error` instead of stopping.
-- 📊 The success/failure status of each patch is written to `patches-applied.txt`.
-- 📱 Requires an `arm64-v8a` bundle; versions without one are skipped and the previous compatible version is used.
+- 📊 Per-patch success/failure is written to `patches-applied.txt`, split into one section per variant.
+- 🧹 The generated `.mpp` is limited to **NewX (X-Lite) patches** only.
 - 🚫 Skips `alpha` / `beta` X versions; only stable `prod` / `release` builds are used.
 
 ## 📦 Release Assets
@@ -19,9 +21,18 @@ Every release includes:
 
 | Asset | Description |
 |---|---|
-| `piko-lite-v{version}-{commit}.apk` | Patched APK ready to install |
-| `patches-{commit}.mpp` | Piko patch bundle used for the build |
-| `patches-applied.txt` | List of applied patches with per-patch status (`Success` / `Failure`); new patches marked with `**NEW**` |
+| `piko-lite-v{version}-{commit}-android-{minVer}.apk` | Patched APK for a specific minimum Android version (e.g. `android-12L+.apk`, `android-9.0+.apk`). One per successfully built variant. |
+| `patches-{commit}.mpp` | Piko patch bundle used for the build (NewX only). |
+| `patches-applied.txt` | Per-variant sections listing applied patches with `Success` / `Failure`; new patches marked with `**NEW**`. |
+
+### Which APK should I install?
+
+| File suffix | Target |
+|---|---|
+| `-android-9.0+.apk` | Broad compatibility (Android 9 and newer), single screen DPI |
+| `-android-12L+.apk` | Universal screen DPI (120-640dpi), Android 12L and newer |
+
+Pick the one whose **Minimum Version** matches your device. If both work, either is fine.
 
 ## ⚠️ Disclaimer
 

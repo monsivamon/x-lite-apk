@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from typing import cast
 from bs4 import BeautifulSoup, Tag
 from utils import download, get_scraper
@@ -11,12 +12,16 @@ class Version:
     link: str
 
 
-# Holds APK variant info: bundle flag, download link, architecture
+# Holds APK variant info: bundle flag, download link, architecture,
+# parsed minimum Android version, its raw display text, and screen DPI text
 @dataclass
 class Variant:
     is_bundle: bool
     link: str
     architecture: str
+    min_android: tuple[int, int] = (999, 0)
+    min_android_text: str = ""
+    dpi_text: str = ""
 
 
 # Holds app name and link (currently unused placeholder)
@@ -40,6 +45,21 @@ class FailedToFetch(Exception):
     def __init__(self, url=None) -> None:
         self.message = f"Failed to fetch{' ' + url if url is not None else ''}"
         super().__init__(self.message)
+
+
+# Parse 'Android 12L+' / 'Android 9.0+' / 'Android 10+' into (major, minor).
+# Unknown or 'Varies with device' -> (999, 0) so it sorts last.
+def parse_min_android(text: str | None) -> tuple[int, int]:
+    if not text:
+        return (999, 0)
+    match = re.search(r"Android\s+(\d+)(?:\.(\d+))?\s*(L)?", text, re.IGNORECASE)
+    if not match:
+        return (999, 0)
+    major = int(match.group(1))
+    minor = int(match.group(2)) if match.group(2) else 0
+    if match.group(3) and match.group(3).upper() == "L":
+        minor = max(minor, 1)
+    return (major, minor)
 
 
 # Extract version list from the given APKMirror page
@@ -89,7 +109,7 @@ def download_apk(variant: Variant, path: str = "big_file.apkm"):
     )
 
     download_page = get_scraper().get(download_page_link)
-    if response.status_code != 200:
+    if download_page.status_code != 200:
         raise FailedToFetch(download_page_link)
 
     download_page_body = BeautifulSoup(download_page.content, "html.parser")
@@ -132,8 +152,9 @@ def get_variants(version: Version) -> list[Variant]:
         cells = variant_row.findChildren(
             "div", {"class": "table-cell"}, recursive=False
         )
-        if len(cells) == 0:
-            print("Could not find cells")
+        if len(cells) < 3:
+            print("Could not find enough cells")
+            continue
 
         is_bundle_tag = variant_row.find("span", {"class": "apkm-badge"})
         is_bundle = False
@@ -142,14 +163,26 @@ def get_variants(version: Version) -> list[Variant]:
         else:
             is_bundle = is_bundle_tag.string.strip() == "BUNDLE"
 
-        architecture: str = cells[1].string
+        architecture: str = cells[1].get_text(strip=True)
+        min_android_text: str = cells[2].get_text(strip=True)
+        min_android = parse_min_android(min_android_text)
+        dpi_text: str = cells[3].get_text(strip=True) if len(cells) > 3 else ""
+
         link_element = variant_row.find("a", {"class": "accent_color"})
         if link_element is None:
             print("Failed to find the link element")
+            continue
 
         link: str = f"https://www.apkmirror.com{link_element.attrs['href']}"
         variants.append(
-            Variant(is_bundle=is_bundle, link=link, architecture=architecture)
+            Variant(
+                is_bundle=is_bundle,
+                link=link,
+                architecture=architecture,
+                min_android=min_android,
+                min_android_text=min_android_text,
+                dpi_text=dpi_text,
+            )
         )
 
     print(variants)

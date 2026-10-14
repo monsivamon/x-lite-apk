@@ -36,7 +36,62 @@ def get_supported_versions(constants: str) -> frozenset[str]:
     return versions
 
 
-# Clone Piko x-lite, build patches, and copy the .mpp artifact
+# Remove Instagram, Twitter, and legacy patches/extensions before building.
+# Ported from crimera/piko-newx build_piko.py so only NewX (X-Lite) patches
+# end up in the generated .mpp.
+def pre_build_cleanup(piko_directory: Path) -> None:
+    patches_root = piko_directory / "patches/src/main/kotlin/app/crimera/patches"
+    revanced_root = piko_directory / "patches/src/main/kotlin/app/revanced"
+
+    removed: list[str] = []
+
+    # Non-NewX patch source packages
+    for path in [
+        patches_root / "instagram",
+        patches_root / "twitter",
+        revanced_root,
+    ]:
+        if path.exists():
+            shutil.rmtree(path)
+            removed.append(str(path.relative_to(piko_directory)))
+
+    # Non-NewX extension modules
+    for path in [
+        piko_directory / "extensions/instagram",
+        piko_directory / "extensions/twitter",
+    ]:
+        if path.exists():
+            shutil.rmtree(path)
+            removed.append(str(path.relative_to(piko_directory)))
+
+    # Keep twitter/bringbacktwitter assets for Bring back twitter patch
+    twitter_res = piko_directory / "patches/src/main/resources/twitter"
+    if twitter_res.exists():
+        for item in twitter_res.iterdir():
+            if item.name != "bringbacktwitter":
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                removed.append(str(item.relative_to(piko_directory)))
+
+    addresources_dir = piko_directory / "patches/src/main/resources/addresources"
+    if addresources_dir.exists():
+        for res_name in ("instagram", "twitter"):
+            for matched in addresources_dir.glob(f"*/{res_name}"):
+                if matched.is_dir():
+                    shutil.rmtree(matched)
+                    removed.append(str(matched.relative_to(piko_directory)))
+
+    if removed:
+        log(f"Removed {len(removed)} non-NewX entries:")
+        for entry in removed:
+            log(f"  - {entry}")
+    else:
+        log("pre_build_cleanup: nothing to remove")
+
+
+# Clone Piko x-lite, filter to NewX patches, build, and copy the .mpp artifact
 def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +120,13 @@ def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
         supported_versions = get_supported_versions(
             (piko_directory / XLITE_CONSTANTS).read_text()
         )
-        log(f"Supported versions ({len(supported_versions)}): {sorted(supported_versions)}")
+        log(
+            f"Supported versions ({len(supported_versions)}): "
+            f"{sorted(supported_versions)}"
+        )
+
+        log("Cleaning non-NewX patches/extensions...")
+        pre_build_cleanup(piko_directory)
 
         log("Running gradle clean buildAndroid (may take several minutes)...")
         subprocess.run(
