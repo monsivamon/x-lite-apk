@@ -29,6 +29,7 @@ class GithubCommit:
     sha: str
     html_url: str
     subject: str
+    parents: tuple[str, ...] = ()
 
 
 # Convert a raw GitHub release JSON into a GithubRelease object
@@ -108,11 +109,19 @@ def get_commits_between(
         if not isinstance(sha, str) or not isinstance(html_url, str):
             continue
 
+        raw_parents = commit.get("parents", [])
+        parents = tuple(
+            parent["sha"]
+            for parent in raw_parents
+            if isinstance(parent, dict) and isinstance(parent.get("sha"), str)
+        )
+
         result.append(
             GithubCommit(
                 sha=sha,
                 html_url=html_url,
                 subject=message.partition("\n")[0],
+                parents=parents,
             )
         )
 

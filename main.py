@@ -180,24 +180,78 @@ def get_previous_patches_from_release(previous_release):
     return patches
 
 
-# Return Piko commits between the previous release and current commit
+# Conventional commit scopes that belong to the x-lite (NewX) patch set
+XLITE_COMMIT_SCOPE = re.compile(
+    r"^[A-Za-z]+\((?:newx|x-lite)\)!?:\s",
+    re.IGNORECASE,
+)
+
+
+# Return True if two commit IDs refer to the same commit (short or full SHA)
+def is_same_commit(a: str, b: str) -> bool:
+    return a == b or a.startswith(b) or b.startswith(a)
+
+
+# Keep only x-lite commits:
+#   - non-merge commits on the first-parent chain of the x-lite branch
+#     (excludes merged dev/main history such as Instagram changes)
+#   - NewX-scoped commits from any branch (catches changes merged via a PR)
+def filter_xlite_commits(
+    commits: list[github.GithubCommit], head_sha: str, base_sha: str
+) -> list[github.GithubCommit]:
+    by_sha = {commit.sha: commit for commit in commits}
+
+    first_parent: list[github.GithubCommit] = []
+    current = head_sha
+    while current and not is_same_commit(current, base_sha):
+        commit = by_sha.get(current)
+        if commit is None:
+            # head_sha may be a short SHA; resolve it against the compare list
+            commit = next(
+                (c for c in commits if is_same_commit(c.sha, current)), None
+            )
+        if commit is None:
+            break
+        if len(commit.parents) <= 1:
+            first_parent.append(commit)
+        current = commit.parents[0] if commit.parents else None
+
+    first_parent_shas = {commit.sha for commit in first_parent}
+    return [
+        commit
+        for commit in commits
+        if commit.sha in first_parent_shas
+        or (len(commit.parents) <= 1 and XLITE_COMMIT_SCOPE.match(commit.subject))
+    ]
+
+
+# Return x-lite commits between the previous release and current commit
 def get_piko_commits(previous_release, current_commit):
     if previous_release is None:
         return None
     previous_commit = previous_release.tag_name.rsplit("-", maxsplit=1)[-1]
+    if not re.fullmatch(r"[0-9a-f]{7,40}", previous_commit):
+        log(f"Could not extract a Piko commit from tag {previous_release.tag_name}")
+        return None
     if previous_commit == current_commit[:7]:
         return []
-    return github.get_commits_between(PIKO_REPO, previous_commit, current_commit)
+    commits = github.get_commits_between(PIKO_REPO, previous_commit, current_commit)
+    if commits is None:
+        return None
+
+    selected = filter_xlite_commits(commits, current_commit, previous_commit)
+    log(f"Selected {len(selected)}/{len(commits)} x-lite commit(s)")
+    return selected
 
 
-# Format Piko commits as a markdown bullet list
+# Format x-lite commits as a markdown bullet list
 def format_commit_list(commits):
     if not commits:
         return ""
     entries = "\n".join(
         f"- [`{c.sha[:7]}`]({c.html_url}) {c.subject}" for c in commits
     )
-    return f"Piko commits since previous release:\n{entries}"
+    return f"NewX commits since previous release:\n{entries}"
 
 
 # Format the applied variants as a markdown table for the release notes
