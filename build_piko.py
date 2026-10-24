@@ -13,6 +13,12 @@ XLITE_CONSTANTS = (
     "patches/src/main/kotlin/app/crimera/patches/newx/utils/Constants.kt"
 )
 
+# Gradle daemon JVM settings written into the cloned Piko project.
+# Piko does not set org.gradle.jvmargs, so Gradle falls back to its defaults
+# (512 MiB heap / 384 MiB metaspace), which is not enough for buildAndroid:
+# lintAnalyzeRelease dies with GC thrashing / metaspace exhaustion.
+GRADLE_JVMARGS = "-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
+
 
 # Result of a Piko build: commit SHA and supported X versions
 @dataclass(frozen=True)
@@ -91,6 +97,29 @@ def pre_build_cleanup(piko_directory: Path) -> None:
         log("pre_build_cleanup: nothing to remove")
 
 
+# Write org.gradle.jvmargs into the cloned Piko project's gradle.properties
+# so the Gradle daemon starts with enough heap and metaspace. Any existing
+# org.gradle.jvmargs line is dropped and replaced; other settings are kept.
+def configure_gradle_memory(piko_directory: Path) -> None:
+    gradle_properties = piko_directory / "gradle.properties"
+    existing = (
+        gradle_properties.read_text(encoding="utf-8")
+        if gradle_properties.exists()
+        else ""
+    )
+
+    kept_lines: list[str] = [
+        line
+        for line in existing.splitlines()
+        if not line.strip().startswith("org.gradle.jvmargs")
+    ]
+
+    kept_lines.append(f"org.gradle.jvmargs={GRADLE_JVMARGS}")
+    gradle_properties.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+
+    log(f"Set org.gradle.jvmargs={GRADLE_JVMARGS}")
+
+
 # Clone Piko x-lite, filter to NewX patches, build, and copy the .mpp artifact
 def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
     output_path = Path(output)
@@ -127,6 +156,9 @@ def build_piko_patches(output: str = "bins/patches.mpp") -> PikoBuild:
 
         log("Cleaning non-NewX patches/extensions...")
         pre_build_cleanup(piko_directory)
+
+        log("Configuring Gradle JVM memory...")
+        configure_gradle_memory(piko_directory)
 
         log("Running gradle clean buildAndroid (may take several minutes)...")
         subprocess.run(
