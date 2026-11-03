@@ -121,11 +121,12 @@ def patch_apk(
     if out is not None:
         command.extend(["--out", out])
 
-    command.append(apk)
+    command.append("-f")
+    command.append(os.path.abspath(apk))
 
     result = subprocess.run(command, text=True, capture_output=True)
-    print(result.stdout, end="")
-    print(result.stderr, end="", file=sys.stderr)
+    print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)
 
     if result.returncode != 0:
         result.check_returncode()
@@ -151,7 +152,7 @@ def patch_apk(
 
 
 # Create a GitHub release via gh CLI and upload assets
-def publish_release(tag: str, files: list[str], message: str, title = ""):
+def publish_release(tag: str, files: list[str], message: str, title=""):
     key = os.environ.get("GITHUB_TOKEN")
     if key is None:
         raise Exception("GITHUB_TOKEN is not set")

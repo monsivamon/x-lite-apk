@@ -44,11 +44,12 @@ def arch_priority(architecture: str) -> int | None:
 
 
 # Build a URL/filesystem-safe slug from the min Android display text.
-# 'Android 12L+' -> 'android-12L+', 'Android 9.0+' -> 'android-9.0+'
+# 'Android 12L+' -> 'android-12Lplus', 'Android 9.0+' -> 'android-9.0plus'
 def android_slug(min_android_text: str) -> str:
     text = (min_android_text or "unknown").strip()
     text = re.sub(r"^Android\s+", "", text, flags=re.IGNORECASE)
     text = text.replace(" ", "-")
+    text = text.replace("+", "plus") 
     return f"android-{text}"
 
 
@@ -286,7 +287,7 @@ def process(latest_version, piko_build, download_variants, previous_release=None
                 log(f"Download missing after fetch: {apk_path}")
                 continue
             
-            # --- [DEBUG] Validate downloaded file ---
+            # --- DEBUG LOG ---
             size = os.path.getsize(apk_path)
             with open(apk_path, "rb") as f:
                 magic = f.read(4)
@@ -297,7 +298,6 @@ def process(latest_version, piko_build, download_variants, previous_release=None
                 with open(apk_path, "rb") as f:
                     head = f.read(300)
                 log(f"  [ERROR] First 300 bytes: {head!r}")
-                # Remove the invalid file so it doesn't cause Morphe to crash
                 os.remove(apk_path)
                 continue
 
