@@ -44,11 +44,12 @@ def arch_priority(architecture: str) -> int | None:
 
 
 # Build a URL/filesystem-safe slug from the min Android display text.
-# 'Android 12L+' -> 'android-12L+', 'Android 9.0+' -> 'android-9.0+'
+# 'Android 12L+' -> 'android-12Lplus', 'Android 9.0+' -> 'android-9.0plus'
 def android_slug(min_android_text: str) -> str:
     text = (min_android_text or "unknown").strip()
     text = re.sub(r"^Android\s+", "", text, flags=re.IGNORECASE)
     text = text.replace(" ", "-")
+    text = text.replace("+", "plus") 
     return f"android-{text}"
 
 
@@ -285,6 +286,21 @@ def process(latest_version, piko_build, download_variants, previous_release=None
             if not os.path.exists(apk_path):
                 log(f"Download missing after fetch: {apk_path}")
                 continue
+            
+            # --- DEBUG LOG ---
+            size = os.path.getsize(apk_path)
+            with open(apk_path, "rb") as f:
+                magic = f.read(4)
+            log(f"  [DEBUG] File size: {size} bytes, Magic bytes: {magic!r}")
+            
+            if magic != b"PK\x03\x04":
+                log(f"  [ERROR] Downloaded file is not a valid ZIP/APKM!")
+                with open(apk_path, "rb") as f:
+                    head = f.read(300)
+                log(f"  [ERROR] First 300 bytes: {head!r}")
+                os.remove(apk_path)
+                continue
+
             log(f"Download complete: {apk_path}")
             downloaded.append((variant, slug, apk_path))
         except Exception as exc:
