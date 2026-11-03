@@ -49,7 +49,7 @@ def download(link, out, headers=None, use_scraper=False):
         return
 
     if use_scraper:
-        print(f"Downloading with scraper: {link}")
+        print(f"Downloading with scraper: {link}", flush=True)
 
     session = get_scraper() if use_scraper else requests
 

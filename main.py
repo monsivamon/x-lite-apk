@@ -285,6 +285,22 @@ def process(latest_version, piko_build, download_variants, previous_release=None
             if not os.path.exists(apk_path):
                 log(f"Download missing after fetch: {apk_path}")
                 continue
+            
+            # --- [DEBUG] Validate downloaded file ---
+            size = os.path.getsize(apk_path)
+            with open(apk_path, "rb") as f:
+                magic = f.read(4)
+            log(f"  [DEBUG] File size: {size} bytes, Magic bytes: {magic!r}")
+            
+            if magic != b"PK\x03\x04":
+                log(f"  [ERROR] Downloaded file is not a valid ZIP/APKM!")
+                with open(apk_path, "rb") as f:
+                    head = f.read(300)
+                log(f"  [ERROR] First 300 bytes: {head!r}")
+                # Remove the invalid file so it doesn't cause Morphe to crash
+                os.remove(apk_path)
+                continue
+
             log(f"Download complete: {apk_path}")
             downloaded.append((variant, slug, apk_path))
         except Exception as exc:
