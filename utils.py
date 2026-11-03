@@ -121,7 +121,6 @@ def patch_apk(
     if out is not None:
         command.extend(["--out", out])
 
-    command.append("-f")
     command.append(os.path.abspath(apk))
 
     result = subprocess.run(command, text=True, capture_output=True)
