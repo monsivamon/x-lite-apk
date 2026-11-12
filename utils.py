@@ -20,15 +20,48 @@ def github_api_headers() -> dict[str, str]:
     return headers
 
 
-# Return the singleton cloudscraper session instance
+# Hybrid scraper:
+#   Strategy 1: APKUpdater UA (APKMirror-permitted)
+#   Strategy 2: cloudscraper stealth mode (enable_stealth=True)
+#   Strategy 3: curl_cffi Chrome TLS impersonation fallback on 403
+class _HybridSession:
+    def __init__(self) -> None:
+        import cloudscraper
+
+        try:
+            self._primary = cloudscraper.create_scraper(enable_stealth=True)
+        except TypeError:
+            # Older cloudscraper without stealth kwarg
+            self._primary = cloudscraper.create_scraper()
+        self._primary.headers.update({"User-Agent": "APKUpdater-v3.0.3"})
+        self._fallback = None
+        self.headers = self._primary.headers
+        print("[scraper] primary: cloudscraper (stealth + APKUpdater UA)", flush=True)
+
+    def _get_fallback(self):
+        if self._fallback is None:
+            from curl_cffi import requests as curl_requests
+            self._fallback = curl_requests.Session(impersonate="chrome124")
+            print("[scraper] fallback: curl_cffi (Chrome 124 full impersonation)", flush=True)
+        return self._fallback
+
+    def get(self, *args, **kwargs):
+        r = self._primary.get(*args, **kwargs)
+        if r.status_code == 403:
+            try:
+                r.close()
+            except Exception:
+                pass
+            print("[scraper] primary returned 403, retrying with curl_cffi...", flush=True)
+            r = self._get_fallback().get(*args, **kwargs)
+        return r
+
+
+# Return the singleton hybrid scraper instance
 def get_scraper():
     global _scraper
     if _scraper is None:
-        import cloudscraper
-        _scraper = cloudscraper.create_scraper()
-        _scraper.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        })
+        _scraper = _HybridSession()
     return _scraper
 
 
