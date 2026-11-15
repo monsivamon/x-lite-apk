@@ -58,7 +58,7 @@ def arch_priority(architecture: str) -> int | None:
 def android_slug(min_android_text: str) -> str:
     text = (min_android_text or "unknown").strip()
     text = re.sub(r"^Android\s+", "", text, flags=re.IGNORECASE)
-    text = text.replace(" ", "-").replace("+", "plus") 
+    text = text.replace(" ", "-").replace("+", "plus")
     return f"android-{text}"
 
 def get_bundle_variants(variants, limit: int = MAX_VARIANTS):
@@ -159,23 +159,20 @@ def is_same_commit(a: str, b: str) -> bool:
     return a == b or a.startswith(b) or b.startswith(a)
 
 def filter_xlite_commits(commits: list[github.GithubCommit], head_sha: str, base_sha: str) -> list[github.GithubCommit]:
-    by_sha = {commit.sha: commit for commit in commits}
-    first_parent: list[github.GithubCommit] = []
-    current = head_sha
-    while current and not is_same_commit(current, base_sha):
-        commit = by_sha.get(current)
-        if commit is None:
-            commit = next((c for c in commits if is_same_commit(c.sha, current)), None)
-        if commit is None: break
-        if len(commit.parents) <= 1: first_parent.append(commit)
-        current = commit.parents[0] if commit.parents else None
+    # Strictly extract commits related to NewX
+    result = []
+    for commit in commits:
+        if len(commit.parents) > 1:
+            continue  # Exclude merge commits
 
-    first_parent_shas = {commit.sha for commit in first_parent}
-    return [
-        commit for commit in commits
-        if commit.sha in first_parent_shas
-        or (len(commit.parents) <= 1 and XLITE_COMMIT_SCOPE.match(commit.subject))
-    ]
+        # Include if the scope is (newx) or (x-lite)
+        if XLITE_COMMIT_SCOPE.match(commit.subject):
+            result.append(commit)
+        # Include if the subject explicitly mentions "newx" even without a scope
+        elif "newx" in commit.subject.lower():
+            result.append(commit)
+
+    return result
 
 def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
     if not previous_piko_commit:
@@ -185,7 +182,7 @@ def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
         return None
     if is_same_commit(previous_piko_commit, current_commit):
         return []
-    
+
     commits = github.get_commits_between(PIKO_REPO, previous_piko_commit, current_commit)
     if commits is None: return None
 
@@ -243,14 +240,14 @@ def write_patches_bundle(release_tag: str, app_version: str, piko_build, repo: s
 
 def process(release_tag: str, patch_version: str, piko_build, previous_release, semantic_bump: bool):
     log(f"Target Piko commit: {piko_build.commit[:7]}")
-    
+
     log("Fetching X versions from APKMirror...")
     apk_versions = apkmirror.get_versions("https://www.apkmirror.com/apk/x-corp/twitter/")
-    
+
     latest_x_version, download_variants = find_version_with_arm64_variant(apk_versions, piko_build.supported_versions)
     if latest_x_version is None or not download_variants:
         raise Exception("No compatible X APK with arm64 bundle found on APKMirror")
-        
+
     for v in download_variants:
         log(f"Will use: {v.architecture} / {v.min_android_text} / {v.dpi_text}")
 
@@ -259,7 +256,7 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
 
     is_new_tag = previous_release is None or previous_release.tag_name != release_tag
     content_changed = (prev_x_ver != latest_x_version.version) or (prev_piko_commit is None or not piko_build.commit.startswith(prev_piko_commit))
-    
+
     if not semantic_bump and not content_changed and not is_new_tag:
         log("No semantic or content changes found. Skipping release.")
         return
@@ -279,7 +276,7 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
             if not os.path.exists(apk_path):
                 log(f"Download missing after fetch: {apk_path}")
                 continue
-            
+
             with open(apk_path, "rb") as f:
                 magic = f.read(4)
             if magic != b"PK\x03\x04":
@@ -344,25 +341,25 @@ Piko source:
 
     mpp_name = f"bins/patches-{patch_version}.mpp"
     release_assets = [b["apk_name"] for b in built] + [mpp_name, PATCHES_APPLIED_TXT]
-    
+
     log(f"Publishing release {release_tag} with {len(built)} APK(s)...")
     publish_release(release_tag, release_assets, message, release_tag)
-    
+
     write_patches_bundle(release_tag, latest_x_version.version, piko_build)
     log("Done.")
 
 def main(release_tag: str, semantic_bump: bool):
     if not RELEASE_TAG_PATTERN.fullmatch(release_tag):
         raise ValueError(f"Invalid semantic release tag: {release_tag}")
-    
+
     patch_version = release_tag.removeprefix("v")
-    
+
     log("Building Piko patches (x-lite branch)...")
     piko_build = build_piko_patches(patch_version=patch_version)
     log(f"Piko build: {piko_build.commit[:7]}, supports {len(piko_build.supported_versions)} versions")
 
     previous_release = github.get_last_build_version(REPO)
-    
+
     process(
         release_tag=release_tag, patch_version=patch_version, piko_build=piko_build,
         previous_release=previous_release, semantic_bump=semantic_bump,
