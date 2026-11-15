@@ -2,11 +2,11 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 import requests
 
 _scraper = None
-
 
 # Build headers for GitHub API requests, adding auth if available
 def github_api_headers() -> dict[str, str]:
@@ -18,7 +18,6 @@ def github_api_headers() -> dict[str, str]:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
-
 
 # Hybrid scraper:
 #   Strategy 1: APKUpdater UA (APKMirror-permitted)
@@ -56,7 +55,6 @@ class _HybridSession:
             r = self._get_fallback().get(*args, **kwargs)
         return r
 
-
 # Return the singleton hybrid scraper instance
 def get_scraper():
     global _scraper
@@ -64,12 +62,10 @@ def get_scraper():
         _scraper = _HybridSession()
     return _scraper
 
-
 # Print an error message to stderr and exit with code 1
 def panic(message: str):
     print(message, file=sys.stderr)
     exit(1)
-
 
 # Download a file from link to out, optionally via cloudscraper
 def download(link, out, headers=None, use_scraper=False):
@@ -93,7 +89,6 @@ def download(link, out, headers=None, use_scraper=False):
                 if chunk:
                     f.write(chunk)
 
-
 # Run a shell command and exit on failure
 def run_command(command: list[str]):
     cmd = subprocess.run(command, capture_output=True, shell=True)
@@ -104,7 +99,6 @@ def run_command(command: list[str]):
         print(cmd.stdout)
         print(cmd.stderr)
         exit(1)
-
 
 # Apply patches via Morphe CLI and return per-patch success status
 def patch_apk(
@@ -118,24 +112,13 @@ def patch_apk(
     continue_on_error: bool = False,
 ) -> dict[str, bool]:
     command = [
-        "java",
-        "-jar",
-        cli,
-        "patch",
-        "-p",
-        patches,
-        "--keystore",
-        "ks.keystore",
-        "--keystore-entry-password",
-        "123456789",
-        "--keystore-password",
-        "123456789",
-        "--signer",
-        "jhc",
-        "--keystore-entry-alias",
-        "jhc",
-        "--force",
-        "--exclusive",
+        "java", "-jar", cli, "patch", "-p", patches,
+        "--keystore", "ks.keystore",
+        "--keystore-entry-password", "123456789",
+        "--keystore-password", "123456789",
+        "--signer", "jhc",
+        "--keystore-entry-alias", "jhc",
+        "--force", "--exclusive",
     ]
 
     if continue_on_error:
@@ -168,11 +151,7 @@ def patch_apk(
 
     if includes:
         failed = set(
-            re.findall(
-                r"FAILED:\s*(.+?)\s*$",
-                output,
-                re.MULTILINE | re.IGNORECASE,
-            )
+            re.findall(r"FAILED:\s*(.+?)\s*$", output, re.MULTILINE | re.IGNORECASE)
         )
         for patch_name in includes:
             statuses[patch_name] = patch_name not in failed
@@ -181,7 +160,6 @@ def patch_apk(
         raise FileNotFoundError(f"Morphe did not create the expected output: {out}")
 
     return statuses
-
 
 # Create a GitHub release via gh CLI and upload assets
 def publish_release(tag: str, files: list[str], message: str, title=""):
@@ -192,7 +170,7 @@ def publish_release(tag: str, files: list[str], message: str, title=""):
     ref = os.environ.get("GITHUB_REF", "")
     is_prerelease = ref != "refs/heads/master"
 
-    command = ["gh", "release", "create", tag, "--notes", message, "--title", title]
+    command = ["gh", "release", "create", tag, "--title", title]
     if is_prerelease:
         command.append("--prerelease")
         print(f"Non-master ref ({ref}) -> creating prerelease")
@@ -202,7 +180,17 @@ def publish_release(tag: str, files: list[str], message: str, title=""):
     if len(files) == 0:
         raise Exception("Files should have atleast one item")
 
+    # Write notes to a temp file to avoid "Argument list too long" errors
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+        f.write(message)
+        notes_file = f.name
+
+    command.extend(["--notes-file", notes_file])
+
     for file in files:
         command.append(file)
 
-    subprocess.run(command, env=os.environ.copy()).check_returncode()
+    try:
+        subprocess.run(command, env=os.environ.copy()).check_returncode()
+    finally:
+        os.unlink(notes_file)

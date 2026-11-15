@@ -177,17 +177,19 @@ def filter_xlite_commits(commits: list[github.GithubCommit], head_sha: str, base
         or (len(commit.parents) <= 1 and XLITE_COMMIT_SCOPE.match(commit.subject))
     ]
 
-def get_piko_commits(previous_release, current_commit):
-    if previous_release is None: return None
-    previous_commit = previous_release.tag_name.rsplit("-", maxsplit=1)[-1]
-    if not re.fullmatch(r"[0-9a-f]{7,40}", previous_commit):
-        log(f"Could not extract a Piko commit from tag {previous_release.tag_name}")
+def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
+    if not previous_piko_commit:
         return None
-    if previous_commit == current_commit[:7]: return []
-    commits = github.get_commits_between(PIKO_REPO, previous_commit, current_commit)
+    if not re.fullmatch(r"[0-9a-f]{7,40}", previous_piko_commit):
+        log(f"Could not extract a valid Piko commit from {previous_piko_commit}")
+        return None
+    if is_same_commit(previous_piko_commit, current_commit):
+        return []
+    
+    commits = github.get_commits_between(PIKO_REPO, previous_piko_commit, current_commit)
     if commits is None: return None
 
-    selected = filter_xlite_commits(commits, current_commit, previous_commit)
+    selected = filter_xlite_commits(commits, current_commit, previous_piko_commit)
     log(f"Selected {len(selected)}/{len(commits)} x-lite commit(s)")
     return selected
 
@@ -317,7 +319,9 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
     log("Writing patches-applied.txt...")
     write_patches_applied(built, previous_patches)
 
-    commit_list = format_commit_list(get_piko_commits(previous_release, piko_build.commit))
+    # Use prev_piko_commit fetched from metadata or legacy tag instead of parsing tag directly
+    commit_list = format_commit_list(get_piko_commits(prev_piko_commit, piko_build.commit))
+    
     additional_notes = f"\n\n{commit_list}" if commit_list else ""
     variant_info = format_variants_info(latest_x_version, [b["variant"] for b in built])
 
