@@ -16,11 +16,9 @@ from utils import download, panic, publish_release
 
 PATCHES_BUNDLE_FILE = "patches-bundle.json"
 PATCHES_APPLIED_TXT = "patches-applied.txt"
-COMMITS_APPLIED_TXT = "commits-applied.txt"
 MORPHE_CLI = "bins/morphe-cli.jar"
 
 MAX_VARIANTS = 2
-MAX_COMMITS_IN_NOTES = 15 # Number of commits to show in release notes before truncating
 
 LEGACY_RELEASE_PATTERN = re.compile(r"^(?P<app>.+)-(?P<piko>[0-9a-f]{7,40})$")
 RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -195,23 +193,13 @@ def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
     log(f"Selected {len(selected)}/{len(commits)} x-lite commit(s)")
     return selected
 
-def process_commits(commits):
+def format_commit_list(commits):
     if not commits:
-        return "", None
-
-    entries = [f"- [`{c.sha[:7]}`]({c.html_url}) {c.subject}" for c in commits]
-    
-    if len(entries) > MAX_COMMITS_IN_NOTES:
-        # Write full list to file
-        Path(COMMITS_APPLIED_TXT).write_text("\n".join(entries) + "\n", encoding="utf-8")
-        
-        # Truncate for release notes
-        display_entries = entries[:MAX_COMMITS_IN_NOTES]
-        notes = "NewX commits since previous release:\n" + "\n".join(display_entries)
-        notes += f"\n\n*(Showing latest {MAX_COMMITS_IN_NOTES} of {len(entries)} commits. See `{COMMITS_APPLIED_TXT}` for the full list.)*"
-        return notes, COMMITS_APPLIED_TXT
-    
-    return "NewX commits since previous release:\n" + "\n".join(entries), None
+        return ""
+    entries = "\n".join(
+        f"- [`{c.sha[:7]}`]({c.html_url}) {c.subject}" for c in commits
+    )
+    return f"NewX commits since previous release:\n{entries}"
 
 def format_variants_info(version, variants) -> str:
     rows = "\n".join(f"| {version.version} | {v.architecture} | {v.min_android_text} | {v.dpi_text} |" for v in variants)
@@ -253,7 +241,7 @@ def write_patches_bundle(release_tag: str, app_version: str, piko_build, repo: s
     }
     Path(PATCHES_BUNDLE_FILE).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
-def process(release_tag: str, patch_version: str, piko_build, previous_release, semantic_bump: bool, generated_changelog: str = ""):
+def process(release_tag: str, patch_version: str, piko_build, previous_release, semantic_bump: bool):
     log(f"Target Piko commit: {piko_build.commit[:7]}")
     
     log("Fetching X versions from APKMirror...")
@@ -334,21 +322,26 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
     log("Writing patches-applied.txt...")
     write_patches_applied(built, previous_patches)
 
-    # Fetch and process commits
-    commit_list_str, commits_file = process_commits(get_piko_commits(prev_piko_commit, piko_build.commit))
-    additional_notes = f"\n\n{commit_list_str}" if commit_list_str else ""
-    variant_info = format_variants_info(latest_x_version, [b["variant"] for b in built])
+    # --- Release notes ---
+    log("Fetching Piko commits since previous release...")
+    commit_list = format_commit_list(
+        get_piko_commits(prev_piko_commit, piko_build.commit)
+    )
+    additional_notes = f"\n\n{commit_list}" if commit_list else ""
 
-    sections = []
-    if generated_changelog: sections.append(generated_changelog)
-    sections.append(variant_info)
-    sections.append(f"Patch list: see `{PATCHES_APPLIED_TXT}` asset.")
-    if additional_notes: sections.append(additional_notes)
-    sections.append(f"Piko source:\n[x-lite@{piko_build.commit[:7]}](https://github.com/crimera/piko/commit/{piko_build.commit})")
+    variant_info = format_variants_info(
+        latest_x_version, [b["variant"] for b in built]
+    )
+
+    message = f"""{variant_info}
+
+Patch list: see `{PATCHES_APPLIED_TXT}` asset.{additional_notes}
+
+Piko source:
+[x-lite@{piko_build.commit[:7]}](https://github.com/crimera/piko/commit/{piko_build.commit})
+"""
     
-    message = "\n\n".join(sections)
-    
-    # Fallback truncation just in case
+    # Fallback truncation just in case (invisible to normal user)
     MAX_NOTES_LENGTH = 120000
     if len(message) > MAX_NOTES_LENGTH:
         message = message[:MAX_NOTES_LENGTH] + "\n\n*(Release notes truncated due to GitHub API limits.)*"
@@ -356,8 +349,6 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
 
     mpp_name = f"bins/patches-{patch_version}.mpp"
     release_assets = [b["apk_name"] for b in built] + [mpp_name, PATCHES_APPLIED_TXT]
-    if commits_file:
-        release_assets.append(commits_file)
     
     log(f"Publishing release {release_tag} with {len(built)} APK(s)...")
     publish_release(release_tag, release_assets, message, release_tag)
@@ -365,7 +356,7 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
     write_patches_bundle(release_tag, latest_x_version.version, piko_build)
     log("Done.")
 
-def main(release_tag: str, semantic_bump: bool, generated_changelog: str = ""):
+def main(release_tag: str, semantic_bump: bool):
     if not RELEASE_TAG_PATTERN.fullmatch(release_tag):
         raise ValueError(f"Invalid semantic release tag: {release_tag}")
     
@@ -380,20 +371,13 @@ def main(release_tag: str, semantic_bump: bool, generated_changelog: str = ""):
     process(
         release_tag=release_tag, patch_version=patch_version, piko_build=piko_build,
         previous_release=previous_release, semantic_bump=semantic_bump,
-        generated_changelog=generated_changelog,
     )
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Piko X-Lite APK Builder")
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--semantic-bump", choices=("true", "false"), default="false")
-    parser.add_argument("--changelog-file", default=None)
+    parser.add_argument("--changelog-file", default=None) # Kept for CLI compatibility but ignored
     args = parser.parse_args()
-    
-    generated_changelog = ""
-    if args.changelog_file:
-        changelog = Path(args.changelog_file).read_text(encoding="utf-8").strip()
-        if changelog != "*No notable changes in this release.*":
-            generated_changelog = changelog
 
-    main(args.release_tag, args.semantic_bump == "true", generated_changelog)
+    main(args.release_tag, args.semantic_bump == "true")
