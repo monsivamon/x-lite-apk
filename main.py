@@ -2,6 +2,9 @@ import os
 import re
 import shutil
 from pathlib import Path
+from argparse import ArgumentParser
+import json
+from datetime import datetime, timezone
 
 import apkmirror
 import github
@@ -11,64 +14,62 @@ from constants import REPO
 from download_bins import download_morphe_cli
 from utils import download, panic, publish_release
 
-PATCHES_MPP = "bins/patches.mpp"
-PATCHES_MPP_PREV = "bins/patches-prev.mpp"
+PATCHES_BUNDLE_FILE = "patches-bundle.json"
 PATCHES_APPLIED_TXT = "patches-applied.txt"
 MORPHE_CLI = "bins/morphe-cli.jar"
 
-# Number of top variants to attempt per release
 MAX_VARIANTS = 2
 
+LEGACY_RELEASE_PATTERN = re.compile(r"^(?P<app>.+)-(?P<piko>[0-9a-f]{7,40})$")
+RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
+APP_VERSION_PATTERN = re.compile(
+    r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
+    r"(?:-(?P<channel>alpha|beta|prod)\.(?P<revision>\d+))?$"
+)
+APP_VERSION_CHANNEL_PRIORITY = {"alpha": 0, "beta": 1, "prod": 2}
 
-# Print a prefixed progress message for the main pipeline
 def log(message: str):
     print(f"[main] {message}", flush=True)
 
+def app_version_sort_key(version: str) -> tuple[int, int, int, int, int]:
+    match = APP_VERSION_PATTERN.fullmatch(version)
+    if match is None:
+        raise ValueError(f"Unsupported X app version format: {version}")
 
-# Return True if the version string contains neither alpha nor beta
+    channel = match.group("channel")
+    channel_priority = APP_VERSION_CHANNEL_PRIORITY[channel] if channel is not None else 3
+    revision = int(match.group("revision") or 0)
+    return (
+        int(match.group("major")), int(match.group("minor")), int(match.group("patch")),
+        channel_priority, revision,
+    )
+
 def is_stable_version(version: str) -> bool:
     lower = version.lower()
     return "alpha" not in lower and "beta" not in lower
 
-
-# Architecture priority for bundle selection: lower is better, None = not eligible
 def arch_priority(architecture: str) -> int | None:
     a = (architecture or "").lower().strip()
-    if "universal" in a:
-        return 0
-    if "arm64-v8a" in a and "armeabi-v7a" in a:
-        return 1
-    if "arm64-v8a" in a:
-        return 2
+    if "universal" in a: return 0
+    if "arm64-v8a" in a and "armeabi-v7a" in a: return 1
+    if "arm64-v8a" in a: return 2
     return None
 
-
-# Build a URL/filesystem-safe slug from the min Android display text.
-# 'Android 12L+' -> 'android-12Lplus', 'Android 9.0+' -> 'android-9.0plus'
 def android_slug(min_android_text: str) -> str:
     text = (min_android_text or "unknown").strip()
     text = re.sub(r"^Android\s+", "", text, flags=re.IGNORECASE)
-    text = text.replace(" ", "-")
-    text = text.replace("+", "plus") 
+    text = text.replace(" ", "-").replace("+", "plus")
     return f"android-{text}"
 
-
-# Pick the top N bundle variants:
-#   1) universal > arm64-v8a + armeabi-v7a > arm64-v8a
-#   2) among the same architecture, the lowest required Android version
-#   Deduplicates by android_slug so we do not publish two identical Android targets.
 def get_bundle_variants(variants, limit: int = MAX_VARIANTS):
     candidates = []
     for v in variants:
-        if not v.is_bundle:
-            continue
+        if not v.is_bundle: continue
         prio = arch_priority(v.architecture)
-        if prio is None:
-            continue
+        if prio is None: continue
         candidates.append((prio, v.min_android, v))
 
-    if not candidates:
-        return []
+    if not candidates: return []
 
     candidates.sort(key=lambda item: (item[0], item[1]))
 
@@ -76,16 +77,12 @@ def get_bundle_variants(variants, limit: int = MAX_VARIANTS):
     seen_slugs: set[str] = set()
     for _, _, v in candidates:
         slug = android_slug(v.min_android_text)
-        if slug in seen_slugs:
-            continue
+        if slug in seen_slugs: continue
         seen_slugs.add(slug)
         result.append(v)
-        if len(result) >= limit:
-            break
+        if len(result) >= limit: break
     return result
 
-
-# Walk versions from newest to oldest until one with an arm64 bundle is found
 def find_version_with_arm64_variant(versions, supported_versions):
     for version in versions:
         if supported_versions is not None and version.version not in supported_versions:
@@ -102,16 +99,11 @@ def find_version_with_arm64_variant(versions, supported_versions):
             continue
 
         for v in selected:
-            log(
-                f"Selected variant for {version.version}: "
-                f"{v.architecture} / {v.min_android_text} / {v.dpi_text}"
-            )
+            log(f"Selected variant for {version.version}: {v.architecture} / {v.min_android_text} / {v.dpi_text}")
         return version, selected
 
     return None, []
 
-
-# Format patches as markdown, marking new ones and optional status
 def format_patch_list(patches, previous_patches, statuses=None):
     known = set(previous_patches or [])
     mark_new = previous_patches is not None
@@ -125,37 +117,21 @@ def format_patch_list(patches, previous_patches, statuses=None):
             lines.append(f"- {new_mark}{patch}")
     return "\n".join(lines)
 
-
-# Write per-variant patch results to patches-applied.txt.
-# builds: list of dicts with keys variant, slug, patches, statuses
 def write_patches_applied(builds, previous_patches):
     sections: list[str] = []
     for build in builds:
         variant = build["variant"]
         slug = build["slug"]
-        header = (
-            f"# {slug} | {variant.architecture} | {variant.dpi_text or 'unknown dpi'}"
-        )
-        body = format_patch_list(
-            build["patches"], previous_patches, build["statuses"]
-        )
+        header = f"# {slug} | {variant.architecture} | {variant.dpi_text or 'unknown dpi'}"
+        body = format_patch_list(build["patches"], previous_patches, build["statuses"])
         sections.append(f"{header}\n{body}")
     content = "\n\n".join(sections) + "\n"
     Path(PATCHES_APPLIED_TXT).write_text(content, encoding="utf-8")
-    log(
-        f"Wrote {len(builds)} variant section(s) to {PATCHES_APPLIED_TXT}"
-    )
+    log(f"Wrote {len(builds)} variant section(s) to {PATCHES_APPLIED_TXT}")
 
-
-# Return the .mpp asset from the previous release, or None
 def find_previous_mpp_asset(previous_release):
-    return next(
-        (a for a in previous_release.assets if a.name.endswith(".mpp")),
-        None,
-    )
+    return next((a for a in previous_release.assets if a.name.endswith(".mpp")), None)
 
-
-# Download the previous .mpp and extract patch names from it
 def get_previous_patches_from_release(previous_release):
     if previous_release is None:
         log("No previous release (first build)")
@@ -164,88 +140,59 @@ def get_previous_patches_from_release(previous_release):
     mpp_asset = find_previous_mpp_asset(previous_release)
     if mpp_asset is None:
         asset_names = [a.name for a in previous_release.assets]
-        raise Exception(
-            f"No .mpp asset found in previous release {previous_release.tag_name}. "
-            f"Assets: {asset_names}"
-        )
+        raise Exception(f"No .mpp asset found in previous release {previous_release.tag_name}. Assets: {asset_names}")
 
     log(f"Downloading previous mpp: {mpp_asset.name}")
-    if os.path.exists(PATCHES_MPP_PREV):
-        os.remove(PATCHES_MPP_PREV)
-    download(mpp_asset.browser_download_url, PATCHES_MPP_PREV)
-    log(f"Saved to {PATCHES_MPP_PREV}")
+    prev_mpp = "bins/patches-prev.mpp"
+    if os.path.exists(prev_mpp): os.remove(prev_mpp)
+    download(mpp_asset.browser_download_url, prev_mpp)
+    log(f"Saved to {prev_mpp}")
 
     log("Extracting patch list from previous mpp...")
-    patches = get_xlite_patches(MORPHE_CLI, PATCHES_MPP_PREV)
+    patches = get_xlite_patches(MORPHE_CLI, prev_mpp)
     log(f"Previous patches: {len(patches)}")
     return patches
 
+XLITE_COMMIT_SCOPE = re.compile(r"^[A-Za-z]+\((?:newx|x-lite)\)!?:\s", re.IGNORECASE)
 
-# Conventional commit scopes that belong to the x-lite (NewX) patch set
-XLITE_COMMIT_SCOPE = re.compile(
-    r"^[A-Za-z]+\((?:newx|x-lite)\)!?:\s",
-    re.IGNORECASE,
-)
-
-
-# Return True if two commit IDs refer to the same commit (short or full SHA)
 def is_same_commit(a: str, b: str) -> bool:
     return a == b or a.startswith(b) or b.startswith(a)
 
-
-# Keep only x-lite commits:
-#   - non-merge commits on the first-parent chain of the x-lite branch
-#     (excludes merged dev/main history such as Instagram changes)
-#   - NewX-scoped commits from any branch (catches changes merged via a PR)
-def filter_xlite_commits(
-    commits: list[github.GithubCommit], head_sha: str, base_sha: str
-) -> list[github.GithubCommit]:
+def filter_xlite_commits(commits: list[github.GithubCommit], head_sha: str, base_sha: str) -> list[github.GithubCommit]:
     by_sha = {commit.sha: commit for commit in commits}
-
     first_parent: list[github.GithubCommit] = []
     current = head_sha
     while current and not is_same_commit(current, base_sha):
         commit = by_sha.get(current)
         if commit is None:
-            # head_sha may be a short SHA; resolve it against the compare list
-            commit = next(
-                (c for c in commits if is_same_commit(c.sha, current)), None
-            )
-        if commit is None:
-            break
-        if len(commit.parents) <= 1:
-            first_parent.append(commit)
+            commit = next((c for c in commits if is_same_commit(c.sha, current)), None)
+        if commit is None: break
+        if len(commit.parents) <= 1: first_parent.append(commit)
         current = commit.parents[0] if commit.parents else None
 
     first_parent_shas = {commit.sha for commit in first_parent}
     return [
-        commit
-        for commit in commits
+        commit for commit in commits
         if commit.sha in first_parent_shas
         or (len(commit.parents) <= 1 and XLITE_COMMIT_SCOPE.match(commit.subject))
     ]
 
-
-# Return x-lite commits between the previous release and current commit
-def get_piko_commits(previous_release, current_commit):
-    if previous_release is None:
+def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
+    if not previous_piko_commit:
         return None
-    previous_commit = previous_release.tag_name.rsplit("-", maxsplit=1)[-1]
-    if not re.fullmatch(r"[0-9a-f]{7,40}", previous_commit):
-        log(f"Could not extract a Piko commit from tag {previous_release.tag_name}")
+    if not re.fullmatch(r"[0-9a-f]{7,40}", previous_piko_commit):
+        log(f"Could not extract a valid Piko commit from {previous_piko_commit}")
         return None
-    if previous_commit == current_commit[:7]:
+    if is_same_commit(previous_piko_commit, current_commit):
         return []
-    commits = github.get_commits_between(PIKO_REPO, previous_commit, current_commit)
-    if commits is None:
-        return None
 
-    selected = filter_xlite_commits(commits, current_commit, previous_commit)
+    commits = github.get_commits_between(PIKO_REPO, previous_piko_commit, current_commit)
+    if commits is None: return None
+
+    selected = filter_xlite_commits(commits, current_commit, previous_piko_commit)
     log(f"Selected {len(selected)}/{len(commits)} x-lite commit(s)")
     return selected
 
-
-# Format x-lite commits as a markdown bullet list
 def format_commit_list(commits):
     if not commits:
         return ""
@@ -254,13 +201,8 @@ def format_commit_list(commits):
     )
     return f"NewX commits since previous release:\n{entries}"
 
-
-# Format the applied variants as a markdown table for the release notes
 def format_variants_info(version, variants) -> str:
-    rows = "\n".join(
-        f"| {version.version} | {v.architecture} | {v.min_android_text} | {v.dpi_text} |"
-        for v in variants
-    )
+    rows = "\n".join(f"| {version.version} | {v.architecture} | {v.min_android_text} | {v.dpi_text} |" for v in variants)
     return (
         "### Applied variants\n\n"
         "| Variant | Architecture | Minimum Version | Screen DPI |\n"
@@ -268,40 +210,82 @@ def format_variants_info(version, variants) -> str:
         f"{rows}"
     )
 
+def read_release_metadata() -> dict[str, str]:
+    metadata_path = Path(PATCHES_BUNDLE_FILE)
+    if not metadata_path.exists(): return {}
+    contents = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(contents, dict):
+        raise ValueError(f"{PATCHES_BUNDLE_FILE} must contain a JSON object")
+    return {k: v for k, v in contents.items() if isinstance(k, str) and isinstance(v, str)}
 
-# Run the full build: fetch APKs, patch each surviving variant, and publish
-def process(latest_version, piko_build, download_variants, previous_release=None):
-    log(f"Target X version: {latest_version.version}")
-    log(f"Piko commit: {piko_build.commit[:7]}")
-    log(f"Variant count: {len(download_variants)}")
+def get_previous_context(prev_release, metadata):
+    if prev_release is None: return None, None
+    app_ver = metadata.get("app_version")
+    piko_commit = metadata.get("piko_commit")
+    if app_ver and piko_commit: return app_ver, piko_commit
+    match = LEGACY_RELEASE_PATTERN.match(prev_release.tag_name)
+    if match: return match.group("app"), match.group("piko")
+    return None, None
 
-    # --- Download phase: gather all successfully fetched APKs ---
-    downloaded: list[tuple[object, str, str]] = []
+def write_patches_bundle(release_tag: str, app_version: str, piko_build, repo: str = REPO) -> None:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    patch_version = release_tag.removeprefix("v")
+    mpp_filename = f"patches-{patch_version}.mpp"
+    metadata = {
+        "version": release_tag,
+        "download_url": f"https://github.com/{repo}/releases/download/{release_tag}/{mpp_filename}",
+        "created_at": now,
+        "description": f"Piko x-lite patch bundle for X Lite APK ({release_tag}).",
+        "app_version": app_version,
+        "piko_commit": piko_build.commit,
+    }
+    Path(PATCHES_BUNDLE_FILE).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+def process(release_tag: str, patch_version: str, piko_build, previous_release, semantic_bump: bool):
+    log(f"Target Piko commit: {piko_build.commit[:7]}")
+
+    log("Fetching X versions from APKMirror...")
+    apk_versions = apkmirror.get_versions("https://www.apkmirror.com/apk/x-corp/twitter/")
+
+    latest_x_version, download_variants = find_version_with_arm64_variant(apk_versions, piko_build.supported_versions)
+    if latest_x_version is None or not download_variants:
+        raise Exception("No compatible X APK with arm64 bundle found on APKMirror")
+
+    for v in download_variants:
+        log(f"Will use: {v.architecture} / {v.min_android_text} / {v.dpi_text}")
+
+    metadata = read_release_metadata()
+    prev_x_ver, prev_piko_commit = get_previous_context(previous_release, metadata)
+
+    is_new_tag = previous_release is None or previous_release.tag_name != release_tag
+    content_changed = (prev_x_ver != latest_x_version.version) or (prev_piko_commit is None or not piko_build.commit.startswith(prev_piko_commit))
+
+    if not semantic_bump and not content_changed and not is_new_tag:
+        log("No semantic or content changes found. Skipping release.")
+        return
+
+    log(f"Publishing {release_tag} for X {latest_x_version.version}")
+
+    log("Downloading morphe-cli.jar...")
+    download_morphe_cli(include_prereleases=True)
+
+    downloaded = []
     for variant in download_variants:
         slug = android_slug(variant.min_android_text)
-        apk_path = f"big_file-{latest_version.version}-{slug}.apkm"
+        apk_path = f"big_file-{latest_x_version.version}-{slug}.apkm"
         try:
             log(f"Downloading {slug} ({variant.architecture}) -> {apk_path}")
             apkmirror.download_apk(variant, path=apk_path)
             if not os.path.exists(apk_path):
                 log(f"Download missing after fetch: {apk_path}")
                 continue
-            
-            # --- DEBUG LOG ---
-            size = os.path.getsize(apk_path)
+
             with open(apk_path, "rb") as f:
                 magic = f.read(4)
-            log(f"  [DEBUG] File size: {size} bytes, Magic bytes: {magic!r}")
-            
             if magic != b"PK\x03\x04":
                 log(f"  [ERROR] Downloaded file is not a valid ZIP/APKM!")
-                with open(apk_path, "rb") as f:
-                    head = f.read(300)
-                log(f"  [ERROR] First 300 bytes: {head!r}")
                 os.remove(apk_path)
                 continue
-
-            log(f"Download complete: {apk_path}")
             downloaded.append((variant, slug, apk_path))
         except Exception as exc:
             log(f"Download failed for {slug}: {exc}")
@@ -309,44 +293,25 @@ def process(latest_version, piko_build, download_variants, previous_release=None
     if not downloaded:
         panic("All variant downloads failed")
 
-    log(f"Downloaded {len(downloaded)}/{len(download_variants)} variant(s)")
-
-    # --- Prepare shared tooling and previous patch list ---
-    log("Downloading morphe-cli.jar...")
-    download_morphe_cli(include_prereleases=True)
-    log("morphe-cli.jar ready")
-
-    piko_commit = piko_build.commit[:7]
-    release_tag = f"{latest_version.version}-{piko_commit}"
-    mpp_name = f"patches-{piko_commit}.mpp"
-
     log("Getting previous patch list...")
     previous_patches = get_previous_patches_from_release(previous_release)
 
-    # --- Patch phase: patch each downloaded APK independently ---
-    built: list[dict] = []
+    built = []
     for variant, slug, apk_path in downloaded:
         log(f"Patching {slug} ({variant.architecture})...")
         try:
             patches, patch_statuses = build_apks(
-                latest_version,
-                apk_path,
-                piko_build.commit,
-                suffix=f"-{slug}",
+                latest_x_version, apk_path, piko_build.commit,
+                patch_version=patch_version, suffix=f"-{slug}",
             )
-            apk_name = f"piko-lite-v{latest_version.version}-{piko_commit}-{slug}.apk"
+            apk_name = f"piko-lite-v{latest_x_version.version}-{patch_version}-{slug}.apk"
             if not os.path.exists(apk_name):
                 log(f"Patched APK missing: {apk_name}")
                 continue
-            built.append(
-                {
-                    "variant": variant,
-                    "slug": slug,
-                    "apk_name": apk_name,
-                    "patches": patches,
-                    "statuses": patch_statuses,
-                }
-            )
+            built.append({
+                "variant": variant, "slug": slug, "apk_name": apk_name,
+                "patches": patches, "statuses": patch_statuses,
+            })
             succeeded = sum(1 for v in patch_statuses.values() if v)
             log(f"Built {apk_name}: {succeeded}/{len(patches)} patches succeeded")
         except Exception as exc:
@@ -355,21 +320,18 @@ def process(latest_version, piko_build, download_variants, previous_release=None
     if not built:
         panic("All variant patches failed")
 
-    log(f"Built {len(built)}/{len(downloaded)} patched APK(s)")
-
-    # --- Patch list (all successfully built variants) ---
-    log(f"Writing {PATCHES_APPLIED_TXT}...")
+    log("Writing patches-applied.txt...")
     write_patches_applied(built, previous_patches)
 
     # --- Release notes ---
     log("Fetching Piko commits since previous release...")
     commit_list = format_commit_list(
-        get_piko_commits(previous_release, piko_build.commit)
+        get_piko_commits(prev_piko_commit, piko_build.commit)
     )
     additional_notes = f"\n\n{commit_list}" if commit_list else ""
 
     variant_info = format_variants_info(
-        latest_version, [b["variant"] for b in built]
+        latest_x_version, [b["variant"] for b in built]
     )
 
     message = f"""{variant_info}
@@ -377,60 +339,40 @@ def process(latest_version, piko_build, download_variants, previous_release=None
 Patch list: see `{PATCHES_APPLIED_TXT}` asset.{additional_notes}
 
 Piko source:
-[x-lite@{piko_commit}](https://github.com/crimera/piko/commit/{piko_build.commit})
+[x-lite@{piko_build.commit[:7]}](https://github.com/crimera/piko/commit/{piko_build.commit})
 """
 
-    log(f"Copying mpp to {mpp_name}...")
-    shutil.copy2(PATCHES_MPP, mpp_name)
-
+    mpp_name = f"bins/patches-{patch_version}.mpp"
     release_assets = [b["apk_name"] for b in built] + [mpp_name, PATCHES_APPLIED_TXT]
+
     log(f"Publishing release {release_tag} with {len(built)} APK(s)...")
-    publish_release(
-        release_tag,
-        release_assets,
-        message,
-        release_tag,
-    )
+    publish_release(release_tag, release_assets, message, release_tag)
+
+    write_patches_bundle(release_tag, latest_x_version.version, piko_build)
     log("Done.")
 
+def main(release_tag: str, semantic_bump: bool):
+    if not RELEASE_TAG_PATTERN.fullmatch(release_tag):
+        raise ValueError(f"Invalid semantic release tag: {release_tag}")
 
-# Entry point: find a version with arm64 bundles and trigger the build
-def main():
-    log("Fetching X versions from APKMirror...")
-    versions = apkmirror.get_versions(
-        "https://www.apkmirror.com/apk/x-corp/twitter/"
-    )
-    log(f"Found {len(versions)} versions")
+    patch_version = release_tag.removeprefix("v")
 
     log("Building Piko patches (x-lite branch)...")
-    piko_build = build_piko_patches()
-    log(
-        f"Piko build: {piko_build.commit[:7]}, "
-        f"supports {len(piko_build.supported_versions)} versions"
+    piko_build = build_piko_patches(patch_version=patch_version)
+    log(f"Piko build: {piko_build.commit[:7]}, supports {len(piko_build.supported_versions)} versions")
+
+    previous_release = github.get_last_build_version(REPO)
+
+    process(
+        release_tag=release_tag, patch_version=patch_version, piko_build=piko_build,
+        previous_release=previous_release, semantic_bump=semantic_bump,
     )
-
-    log("Searching for a version with arm64 bundle variants...")
-    latest_version, download_variants = find_version_with_arm64_variant(
-        versions, piko_build.supported_versions
-    )
-    if latest_version is None or not download_variants:
-        raise Exception("No X version with an arm64 bundle variant found")
-    for v in download_variants:
-        log(f"Will use: {v.architecture} / {v.min_android_text} / {v.dpi_text}")
-
-    release_tag = f"{latest_version.version}-{piko_build.commit[:7]}"
-    log(f"Checking last release against {release_tag}...")
-    last_build_version = github.get_last_build_version(REPO)
-    if (
-        last_build_version is not None
-        and last_build_version.tag_name == release_tag
-    ):
-        log("No new compatible version found")
-        return
-
-    log(f"New compatible version found: {latest_version.version}")
-    process(latest_version, piko_build, download_variants, last_build_version)
-
 
 if __name__ == "__main__":
-    main()
+    parser = ArgumentParser(description="Piko X-Lite APK Builder")
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--semantic-bump", choices=("true", "false"), default="false")
+    parser.add_argument("--changelog-file", default=None) # Kept for workflow compatibility but ignored
+    args = parser.parse_args()
+
+    main(args.release_tag, args.semantic_bump == "true")
