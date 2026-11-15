@@ -19,8 +19,6 @@ PATCHES_APPLIED_TXT = "patches-applied.txt"
 MORPHE_CLI = "bins/morphe-cli.jar"
 
 MAX_VARIANTS = 2
-MAX_CHANGELOG_LENGTH = 3000  # Truncate the generated changelog if it's too long
-MAX_COMMITS_IN_NOTES = 20    # Show max 20 commits if changelog is empty
 
 LEGACY_RELEASE_PATTERN = re.compile(r"^(?P<app>.+)-(?P<piko>[0-9a-f]{7,40})$")
 RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -243,7 +241,7 @@ def write_patches_bundle(release_tag: str, app_version: str, piko_build, repo: s
     }
     Path(PATCHES_BUNDLE_FILE).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
-def process(release_tag: str, patch_version: str, piko_build, previous_release, semantic_bump: bool, generated_changelog: str = ""):
+def process(release_tag: str, patch_version: str, piko_build, previous_release, semantic_bump: bool):
     log(f"Target Piko commit: {piko_build.commit[:7]}")
     
     log("Fetching X versions from APKMirror...")
@@ -327,38 +325,22 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
 
     # --- Release notes ---
     log("Fetching Piko commits since previous release...")
-    commit_list = format_commit_list(get_piko_commits(prev_piko_commit, piko_build.commit))
-    
-    variant_info = format_variants_info(latest_x_version, [b["variant"] for b in built])
+    commit_list = format_commit_list(
+        get_piko_commits(prev_piko_commit, piko_build.commit)
+    )
+    additional_notes = f"\n\n{commit_list}" if commit_list else ""
 
-    sections = []
+    variant_info = format_variants_info(
+        latest_x_version, [b["variant"] for b in built]
+    )
 
-    # 1. Changelog (Bug Fixes / New Features) safely truncated
-    if generated_changelog and generated_changelog != "*No notable changes in this release.*":
-        if len(generated_changelog) > MAX_CHANGELOG_LENGTH:
-            generated_changelog = generated_changelog[:MAX_CHANGELOG_LENGTH] + "\n\n*(Changelog truncated...)*"
-        sections.append(generated_changelog)
+    message = f"""{variant_info}
 
-    # 2. Variant info
-    sections.append(variant_info)
+Patch list: see `{PATCHES_APPLIED_TXT}` asset.{additional_notes}
 
-    # 3. Patch list
-    sections.append(f"Patch list: see `{PATCHES_APPLIED_TXT}` asset.")
-
-    # 4. Piko commits
-    if commit_list:
-        sections.append(commit_list)
-
-    # 5. Piko source
-    sections.append(f"Piko source:\n[x-lite@{piko_build.commit[:7]}](https://github.com/crimera/piko/commit/{piko_build.commit})")
-
-    message = "\n\n".join(sections)
-
-    # Fallback truncation just in case
-    MAX_NOTES_LENGTH = 120000
-    if len(message) > MAX_NOTES_LENGTH:
-        message = message[:MAX_NOTES_LENGTH] + "\n\n*(Release notes truncated due to GitHub API limits.)*"
-        log(f"Truncated release notes to {MAX_NOTES_LENGTH} characters.")
+Piko source:
+[x-lite@{piko_build.commit[:7]}](https://github.com/crimera/piko/commit/{piko_build.commit})
+"""
 
     mpp_name = f"bins/patches-{patch_version}.mpp"
     release_assets = [b["apk_name"] for b in built] + [mpp_name, PATCHES_APPLIED_TXT]
@@ -369,7 +351,7 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
     write_patches_bundle(release_tag, latest_x_version.version, piko_build)
     log("Done.")
 
-def main(release_tag: str, semantic_bump: bool, generated_changelog: str = ""):
+def main(release_tag: str, semantic_bump: bool):
     if not RELEASE_TAG_PATTERN.fullmatch(release_tag):
         raise ValueError(f"Invalid semantic release tag: {release_tag}")
     
@@ -384,20 +366,13 @@ def main(release_tag: str, semantic_bump: bool, generated_changelog: str = ""):
     process(
         release_tag=release_tag, patch_version=patch_version, piko_build=piko_build,
         previous_release=previous_release, semantic_bump=semantic_bump,
-        generated_changelog=generated_changelog
     )
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Piko X-Lite APK Builder")
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--semantic-bump", choices=("true", "false"), default="false")
-    parser.add_argument("--changelog-file", default=None)
+    parser.add_argument("--changelog-file", default=None) # Kept for workflow compatibility but ignored
     args = parser.parse_args()
 
-    generated_changelog = ""
-    if args.changelog_file:
-        changelog = Path(args.changelog_file).read_text(encoding="utf-8").strip()
-        if changelog != "*No notable changes in this release.*":
-            generated_changelog = changelog
-
-    main(args.release_tag, args.semantic_bump == "true", generated_changelog)
+    main(args.release_tag, args.semantic_bump == "true")
