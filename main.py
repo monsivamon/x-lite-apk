@@ -16,9 +16,11 @@ from utils import download, panic, publish_release
 
 PATCHES_BUNDLE_FILE = "patches-bundle.json"
 PATCHES_APPLIED_TXT = "patches-applied.txt"
+COMMITS_APPLIED_TXT = "commits-applied.txt"
 MORPHE_CLI = "bins/morphe-cli.jar"
 
 MAX_VARIANTS = 2
+MAX_COMMITS_IN_NOTES = 15 # Number of commits to show in release notes before truncating
 
 LEGACY_RELEASE_PATTERN = re.compile(r"^(?P<app>.+)-(?P<piko>[0-9a-f]{7,40})$")
 RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -193,10 +195,23 @@ def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
     log(f"Selected {len(selected)}/{len(commits)} x-lite commit(s)")
     return selected
 
-def format_commit_list(commits):
-    if not commits: return ""
-    entries = "\n".join(f"- [`{c.sha[:7]}`]({c.html_url}) {c.subject}" for c in commits)
-    return f"NewX commits since previous release:\n{entries}"
+def process_commits(commits):
+    if not commits:
+        return "", None
+
+    entries = [f"- [`{c.sha[:7]}`]({c.html_url}) {c.subject}" for c in commits]
+    
+    if len(entries) > MAX_COMMITS_IN_NOTES:
+        # Write full list to file
+        Path(COMMITS_APPLIED_TXT).write_text("\n".join(entries) + "\n", encoding="utf-8")
+        
+        # Truncate for release notes
+        display_entries = entries[:MAX_COMMITS_IN_NOTES]
+        notes = "NewX commits since previous release:\n" + "\n".join(display_entries)
+        notes += f"\n\n*(Showing latest {MAX_COMMITS_IN_NOTES} of {len(entries)} commits. See `{COMMITS_APPLIED_TXT}` for the full list.)*"
+        return notes, COMMITS_APPLIED_TXT
+    
+    return "NewX commits since previous release:\n" + "\n".join(entries), None
 
 def format_variants_info(version, variants) -> str:
     rows = "\n".join(f"| {version.version} | {v.architecture} | {v.min_android_text} | {v.dpi_text} |" for v in variants)
@@ -319,10 +334,9 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
     log("Writing patches-applied.txt...")
     write_patches_applied(built, previous_patches)
 
-    # Use prev_piko_commit fetched from metadata or legacy tag instead of parsing tag directly
-    commit_list = format_commit_list(get_piko_commits(prev_piko_commit, piko_build.commit))
-    
-    additional_notes = f"\n\n{commit_list}" if commit_list else ""
+    # Fetch and process commits
+    commit_list_str, commits_file = process_commits(get_piko_commits(prev_piko_commit, piko_build.commit))
+    additional_notes = f"\n\n{commit_list_str}" if commit_list_str else ""
     variant_info = format_variants_info(latest_x_version, [b["variant"] for b in built])
 
     sections = []
@@ -333,8 +347,17 @@ def process(release_tag: str, patch_version: str, piko_build, previous_release, 
     sections.append(f"Piko source:\n[x-lite@{piko_build.commit[:7]}](https://github.com/crimera/piko/commit/{piko_build.commit})")
     
     message = "\n\n".join(sections)
+    
+    # Fallback truncation just in case
+    MAX_NOTES_LENGTH = 120000
+    if len(message) > MAX_NOTES_LENGTH:
+        message = message[:MAX_NOTES_LENGTH] + "\n\n*(Release notes truncated due to GitHub API limits.)*"
+        log(f"Truncated release notes to {MAX_NOTES_LENGTH} characters.")
+
     mpp_name = f"bins/patches-{patch_version}.mpp"
     release_assets = [b["apk_name"] for b in built] + [mpp_name, PATCHES_APPLIED_TXT]
+    if commits_file:
+        release_assets.append(commits_file)
     
     log(f"Publishing release {release_tag} with {len(built)} APK(s)...")
     publish_release(release_tag, release_assets, message, release_tag)
