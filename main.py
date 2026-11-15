@@ -159,20 +159,23 @@ def is_same_commit(a: str, b: str) -> bool:
     return a == b or a.startswith(b) or b.startswith(a)
 
 def filter_xlite_commits(commits: list[github.GithubCommit], head_sha: str, base_sha: str) -> list[github.GithubCommit]:
-    # Strictly extract commits related to NewX
-    result = []
-    for commit in commits:
-        if len(commit.parents) > 1:
-            continue  # Exclude merge commits
+    by_sha = {commit.sha: commit for commit in commits}
+    first_parent: list[github.GithubCommit] = []
+    current = head_sha
+    while current and not is_same_commit(current, base_sha):
+        commit = by_sha.get(current)
+        if commit is None:
+            commit = next((c for c in commits if is_same_commit(c.sha, current)), None)
+        if commit is None: break
+        if len(commit.parents) <= 1: first_parent.append(commit)
+        current = commit.parents[0] if commit.parents else None
 
-        # Include if the scope is (newx) or (x-lite)
-        if XLITE_COMMIT_SCOPE.match(commit.subject):
-            result.append(commit)
-        # Include if the subject explicitly mentions "newx" even without a scope
-        elif "newx" in commit.subject.lower():
-            result.append(commit)
-
-    return result
+    first_parent_shas = {commit.sha for commit in first_parent}
+    return [
+        commit for commit in commits
+        if commit.sha in first_parent_shas
+        or (len(commit.parents) <= 1 and XLITE_COMMIT_SCOPE.match(commit.subject))
+    ]
 
 def get_piko_commits(previous_piko_commit: str | None, current_commit: str):
     if not previous_piko_commit:
